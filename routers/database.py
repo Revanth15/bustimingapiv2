@@ -1,4 +1,4 @@
-import requests
+import datetime
 import os
 from fastapi import APIRouter, HTTPException, Query
 from pocketbase import PocketBase
@@ -94,7 +94,6 @@ async def extract_bus_stops():
         existing_busstops = client.collection("busstops").get_full_list()
         if existing_busstops:
             bus_stop_codes = list(map(lambda stop: stop.id, existing_busstops))
-            print(len(bus_stop_codes))
             # return {"message": "Bus stops already extracted"}
             print(f"{len(bus_stop_codes)} Bus stops already extracted")
     except Exception as e:
@@ -104,20 +103,17 @@ async def extract_bus_stops():
     # Fetch and store bus stops
     try:
         while True:
-            # Fetch data from the external API
             res = queryAPI("ltaodataservice/BusStops", {"$skip": str(counter)})
 
-            # Check if there's more data to process
             if len(res["value"]) == 0:
                 break
 
-            # Append the fetched data to the list
             data_list.append(res["value"])
             counter += 500
-
-        # Flatten the nested list
         data_list = flatten(data_list)
-        print(len(data_list))
+
+        if len(data_list) == len(bus_stop_codes):
+            return {"message": "Bus stops already extracted"}
 
         # Store bus stops in PocketBase
         for stop in data_list:
@@ -129,10 +125,9 @@ async def extract_bus_stops():
                     "longitude": stop["Longitude"],
                     "road_name": stop["RoadName"],
                 }
-                print(new_busstop["id"], new_busstop["road_name"])
+                print(new_busstop["id"], new_busstop["road_name"], new_busstop["description"])
                 client.collection("busstops").create(new_busstop)
-            else:
-                print(stop["BusStopCode"])
+                
         return {"message": "Bus stops extracted and stored successfully"}
     except Exception as e:
         print(f"Error storing bus stops: {e}")
