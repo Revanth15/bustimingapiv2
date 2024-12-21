@@ -12,3 +12,7 @@ class User(BaseModel):
     avatar: str | None = None
     created: datetime | None = None
     updated: datetime | None = None
+
+class BusTimingRequest(BaseModel):
+    busstopcode: str
+    busservicenos: str
