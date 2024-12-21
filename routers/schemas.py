@@ -16,3 +16,7 @@ class User(BaseModel):
 class BusTimingRequest(BaseModel):
     busstopcode: str
     busservicenos: str
+    userID: str
+
+class GetUser(BaseModel):
+    userID: str
