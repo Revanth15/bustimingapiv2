@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import os
 import requests
 from dotenv import load_dotenv
+import httpx
 
 load_dotenv()
 
@@ -27,12 +28,12 @@ def getEnvVariable(key: str, required: bool = True) -> str:
 ACCOUNT_KEY = getEnvVariable("ACCOUNT_KEY")
 
 # Query LTA's API
-def queryAPI(path, params):
-    url = "http://datamall2.mytransport.sg/"
-    headers = {
-    'AccountKey': ACCOUNT_KEY
-    }
-    return requests.get(url + path, headers=headers,params=params).json()
+async def queryAPI(path, params):
+    url = "http://datamall2.mytransport.sg/" + path
+    headers = {'AccountKey': ACCOUNT_KEY}
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers, params=params) 
+    return response.json()
 
 def timeDifferenceToNowSg(target_time_str):
     target_time = datetime.fromisoformat(target_time_str)
@@ -46,20 +47,28 @@ def timeDifferenceToNowSg(target_time_str):
     
     return time_diff_minutes
 
+async def process_bus_service(busService):
+    busArrivalTime = getBusArrivalDetails(busService)
+    if busArrivalTime:
+        return {
+            "serviceNo": busService["ServiceNo"],
+            "serviceDetails": busArrivalTime
+        }
+    return None
+
 def getBusArrivalDetails(busServiceDetails):
-    noOfBuses = ['NextBus','NextBus2','NextBus3']
+    noOfBuses = ['NextBus', 'NextBus2', 'NextBus3']
     busArrivalDetails = []
+
     for key in noOfBuses:
-        if busServiceDetails[key]['EstimatedArrival'] != '':
-            busArrivalTime = timeDifferenceToNowSg(busServiceDetails[key]['EstimatedArrival'])
-            busArrivalDetails.append(
-                {
-                    "busArrivalTime": busArrivalTime,
-                    "busLoad": busServiceDetails[key]["Load"],
-                    "busFeature": busServiceDetails[key]["Feature"],
-                    "busType": busServiceDetails[key]["Type"],
-                }
-            )
-        if key == "NextBus" and busServiceDetails[key]['EstimatedArrival'] == '':
+        estimated_arrival = busServiceDetails[key].get('EstimatedArrival', '')
+        if estimated_arrival:
+            busArrivalDetails.append({
+                "busArrivalTime": timeDifferenceToNowSg(estimated_arrival),
+                "busLoad": busServiceDetails[key]["Load"],
+                "busFeature": busServiceDetails[key]["Feature"],
+                "busType": busServiceDetails[key]["Type"],
+            })
+        elif key == "NextBus":
             return {}
     return busArrivalDetails

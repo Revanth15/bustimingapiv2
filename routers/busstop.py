@@ -1,7 +1,9 @@
 from fastapi import APIRouter, HTTPException
 from routers.database import createRequest, getDBClient,updateUserDetails
 from routers.schemas import BusTimingRequest
-from routers.utils import getBusArrivalDetails, queryAPI
+from routers.utils import process_bus_service, queryAPI
+import asyncio
+
 
 dbClient = getDBClient()
 
@@ -62,32 +64,31 @@ async def extract_bus_stops():
 
 @busStops_router.get("/bustiming")
 async def get_bus_timing(busTimingReq: BusTimingRequest):
-    requestedBusList = busTimingReq.busservicenos.split(',')
-    requestedBusList = [i for i in requestedBusList if i]
+    requestedBusList = [i for i in busTimingReq.busservicenos.split(',') if i]
     try:
-         while True: 
-            ltaResponse = queryAPI(f"ltaodataservice/BusArrivalv2?BusStopCode={busTimingReq.busstopcode}", {})
-            busServices = ltaResponse["Services"]
-            returnReponse = []
-            if requestedBusList[0] == "all":
-                for busService in busServices:
-                    busArrivalTime = getBusArrivalDetails(busService)
-                    returnReponse.append({
-                        "serviceNo" : busService["ServiceNo"],
-                        "serviceDetails": busArrivalTime
-                    })
-            else:
-                for busService in busServices:
-                    if busService["ServiceNo"] in requestedBusList:
-                        busArrivalTime = getBusArrivalDetails(busService)
-                        returnReponse.append({
-                            "serviceNo" : busService["ServiceNo"],
-                            "serviceDetails": busArrivalTime
-                        })
+        ltaResponse = await queryAPI("ltaodataservice/BusArrivalv2", {"BusStopCode": busTimingReq.busstopcode})
+        busServices = ltaResponse.get("Services", [])
+        returnResponse = []
 
-            createRequest(busTimingReq.busstopcode, busTimingReq.busservicenos,busTimingReq.userID)
-            updateUserDetails(busTimingReq.userID)
-            return returnReponse
+        # Process bus timings concurrently
+        if "all" in requestedBusList:
+            tasks = [process_bus_service(busService) for busService in busServices]
+        else:
+            tasks = [
+                process_bus_service(busService)
+                for busService in busServices
+                if busService["ServiceNo"] in requestedBusList
+            ]
+
+        results = await asyncio.gather(*tasks)
+        returnResponse = [res for res in results if res]
+
+        # Background tasks for I/O operations to increase efficiency
+        asyncio.create_task(asyncio.to_thread(createRequest, busTimingReq.busstopcode, busTimingReq.busservicenos, busTimingReq.userID))
+        asyncio.create_task(asyncio.to_thread(updateUserDetails, busTimingReq.userID))
+
+        return returnResponse
+
     except Exception as e:
         print(f"Error retrieving bus service timing: {e}")
         raise HTTPException(status_code=500, detail="Error retrieving bus service timing")

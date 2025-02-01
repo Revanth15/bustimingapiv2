@@ -45,7 +45,8 @@ def get_dbuser(userID: str):
     except Exception as e:
         print(f"Error fetching user: {e}")
         raise HTTPException(status_code=404, detail="User not found")
-    
+
+# Update user details, increment days active & num of requests
 def updateUserDetails(userID: str):
     try:
         dbUser = get_dbuser(userID)
@@ -61,10 +62,10 @@ def updateUserDetails(userID: str):
             })
             return dbuser_details
     except Exception as e:
-        print(f"Error creating request: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create request")
+        print(f"Error updating user details: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update user details")
 
-
+# Create a request in db
 def createRequest(busStopCode: int, busServiceNos: str, userID: str):
     try:
         dbRequest = client.collection("requests").create({
@@ -73,7 +74,6 @@ def createRequest(busStopCode: int, busServiceNos: str, userID: str):
             "userID": userID,
         })
         return dbRequest
-        return
     except Exception as e:
         print(f"Error creating request: {e}")
-        raise HTTPException(status_code=404, detail=e)
+        raise HTTPException(status_code=404, detail=str(e))
