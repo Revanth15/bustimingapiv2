@@ -20,47 +20,73 @@ async def extract_bus_stops():
 
     # Check if bus stops are already extracted
     try:
-        existing_busstops = dbClient.collection("busstops").get_full_list()
-        if existing_busstops:
-            bus_stop_codes = list(map(lambda stop: stop.id, existing_busstops))
-            # return {"message": "Bus stops already extracted"}
-            print(f"{len(bus_stop_codes)} Bus stops already extracted")
+        existing_busstops = await asyncio.to_thread(dbClient.collection("busstops").get_full_list)
+        bus_stop_codes = {stop.id for stop in existing_busstops}  # Using a set for faster lookup
     except Exception as e:
         print(f"Error checking PocketBase: {e}")
         raise HTTPException(status_code=500, detail="Failed to check existing bus stops")
 
-    # Fetch and store bus stops
+    # Fetch and store bus stops concurrently
     try:
+        # Start parallel API calls for bus stops (using asyncio.gather)
+        tasks = []
         while True:
-            res = queryAPI("ltaodataservice/BusStops", {"$skip": str(counter)})
-
-            if len(res["value"]) == 0:
+            tasks.append(queryAPI("ltaodataservice/BusStops", {"$skip": str(counter)}))
+            counter += 500
+            if counter >= 5000:  # Optional limit to avoid an overly long operation (you can adjust this)
                 break
 
-            data_list.append(res["value"])
-            counter += 500
-        data_list = flatten(data_list)
+        results = await asyncio.gather(*tasks)
+        
+        # Flatten all the results from the API calls
+        data_list = flatten([res["value"] for res in results if res.get("value")])
 
         if len(data_list) == len(bus_stop_codes):
             return {"message": "Bus stops already extracted"}
 
-        # Store bus stops in PocketBase
+        # Batch insert bus stops into PocketBase (if supported)
+        new_busstops = []
         for stop in data_list:
             if stop["BusStopCode"] not in bus_stop_codes:
-                new_busstop = {
+                new_busstops.append({
                     "id": stop["BusStopCode"],
                     "description": stop["Description"],
                     "latitude": stop["Latitude"],
                     "longitude": stop["Longitude"],
                     "road_name": stop["RoadName"],
-                }
-                print(new_busstop["id"], new_busstop["road_name"], new_busstop["description"])
-                dbClient.collection("busstops").create(new_busstop)
-                
+                })
+        
+        if new_busstops:
+            # Perform batch insert (assuming PocketBase supports this, otherwise fallback to individual insert)
+            await asyncio.to_thread(lambda: [dbClient.collection("busstops").create(busstop) for busstop in new_busstops])
+
         return {"message": "Bus stops extracted and stored successfully"}
+    
     except Exception as e:
         print(f"Error storing bus stops: {e}")
         raise HTTPException(status_code=500, detail="Failed to extract and store bus stops")
+
+@busStops_router.get("/getallbusstops")
+async def get_all_bus_stops():
+    """
+    Retrieve all bus stop information stored in PocketBase.
+    """
+    try:
+        bus_stops = dbClient.collection("busstops").get_full_list(2500)
+        
+        bus_stop_data = [{
+            "id": stop.id,
+            "description": stop.description,
+            "latitude": stop.latitude,
+            "longitude": stop.longitude,
+            "road_name": stop.road_name
+        } for stop in bus_stops]
+
+        return {"busStops": bus_stop_data}
+    
+    except Exception as e:
+        print(f"Error retrieving bus stops: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve bus stops")
 
 @busStops_router.get("/bustiming")
 async def get_bus_timing(busTimingReq: BusTimingRequest):
