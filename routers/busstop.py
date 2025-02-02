@@ -21,7 +21,7 @@ async def extract_bus_stops():
     # Check if bus stops are already extracted
     try:
         existing_busstops = await asyncio.to_thread(dbClient.collection("busstops").get_full_list)
-        bus_stop_codes = {stop.id for stop in existing_busstops}  # Using a set for faster lookup
+        bus_stop_codes = {stop.id for stop in existing_busstops}
     except Exception as e:
         print(f"Error checking PocketBase: {e}")
         raise HTTPException(status_code=500, detail="Failed to check existing bus stops")
@@ -33,7 +33,7 @@ async def extract_bus_stops():
         while True:
             tasks.append(queryAPI("ltaodataservice/BusStops", {"$skip": str(counter)}))
             counter += 500
-            if counter >= 5000:  # Optional limit to avoid an overly long operation (you can adjust this)
+            if counter >= 8000:
                 break
 
         results = await asyncio.gather(*tasks)
@@ -44,7 +44,6 @@ async def extract_bus_stops():
         if len(data_list) == len(bus_stop_codes):
             return {"message": "Bus stops already extracted"}
 
-        # Batch insert bus stops into PocketBase (if supported)
         new_busstops = []
         for stop in data_list:
             if stop["BusStopCode"] not in bus_stop_codes:
@@ -57,7 +56,6 @@ async def extract_bus_stops():
                 })
         
         if new_busstops:
-            # Perform batch insert (assuming PocketBase supports this, otherwise fallback to individual insert)
             await asyncio.to_thread(lambda: [dbClient.collection("busstops").create(busstop) for busstop in new_busstops])
 
         return {"message": "Bus stops extracted and stored successfully"}
@@ -110,8 +108,10 @@ async def get_bus_timing(busTimingReq: BusTimingRequest):
         returnResponse = [res for res in results if res]
 
         # Background tasks for I/O operations to increase efficiency
-        asyncio.create_task(asyncio.to_thread(createRequest, busTimingReq.busstopcode, busTimingReq.busservicenos, busTimingReq.userID))
-        asyncio.create_task(asyncio.to_thread(updateUserDetails, busTimingReq.userID))
+        # Optional data tracking if userID is present
+        if busTimingReq.userID is not None:
+            asyncio.create_task(asyncio.to_thread(createRequest, busTimingReq.busstopcode, busTimingReq.busservicenos, busTimingReq.userID))
+            asyncio.create_task(asyncio.to_thread(updateUserDetails, busTimingReq.userID))
 
         return returnResponse
 

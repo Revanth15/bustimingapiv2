@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from datetime import datetime
+from typing import Optional
 
 class User(BaseModel):
     id: str | None = None
@@ -16,7 +17,7 @@ class User(BaseModel):
 class BusTimingRequest(BaseModel):
     busstopcode: str
     busservicenos: str
-    userID: str
+    userID: Optional[str] = None
 
 class GetUser(BaseModel):
     userID: str
