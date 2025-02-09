@@ -1,8 +1,9 @@
 from fastapi import APIRouter, HTTPException
 from routers.database import createRequest, getDBClient,updateUserDetails
-from routers.schemas import BusTimingRequest
 from routers.utils import process_bus_service, queryAPI
 import asyncio
+from typing import Optional
+
 
 
 dbClient = getDBClient()
@@ -87,10 +88,11 @@ async def get_all_bus_stops():
         raise HTTPException(status_code=500, detail="Failed to retrieve bus stops")
 
 @busStops_router.get("/bustiming")
-async def get_bus_timing(busTimingReq: BusTimingRequest):
-    requestedBusList = [i for i in busTimingReq.busservicenos.split(',') if i]
+async def get_bus_timing(busstopcode: str, busservicenos: str, userID: Optional[str] = None):
+    requestedBusList = [i for i in busservicenos.split(',') if i]
+    
     try:
-        ltaResponse = await queryAPI("ltaodataservice/BusArrivalv2", {"BusStopCode": busTimingReq.busstopcode})
+        ltaResponse = await queryAPI("ltaodataservice/BusArrivalv2", {"BusStopCode": busstopcode})
         busServices = ltaResponse.get("Services", [])
         returnResponse = []
 
@@ -108,10 +110,10 @@ async def get_bus_timing(busTimingReq: BusTimingRequest):
         returnResponse = [res for res in results if res]
 
         # Background tasks for I/O operations to increase efficiency
-        # Optional data tracking if userID is present
-        if busTimingReq.userID is not None:
-            asyncio.create_task(asyncio.to_thread(createRequest, busTimingReq.busstopcode, busTimingReq.busservicenos, busTimingReq.userID))
-            asyncio.create_task(asyncio.to_thread(updateUserDetails, busTimingReq.userID))
+        if userID is not None:
+            # Use background tasks for operations that are not critical to the response
+            asyncio.create_task(asyncio.to_thread(createRequest, busstopcode, busservicenos, userID))
+            asyncio.create_task(asyncio.to_thread(updateUserDetails, userID))
 
         return returnResponse
 
