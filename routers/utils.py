@@ -69,6 +69,11 @@ def getBusArrivalDetails(busServiceDetails):
                 "busFeature": busServiceDetails[key]["Feature"],
                 "busType": busServiceDetails[key]["Type"],
             })
-        elif key == "NextBus":
-            return {}
+        else:
+            busArrivalDetails.append({
+                "busArrivalTime": -100, 
+                "busLoad": "-",
+                "busFeature": "-",
+                "busType": "-"
+            })
     return busArrivalDetails
