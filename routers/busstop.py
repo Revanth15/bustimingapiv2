@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from routers.database import createRequest, getDBClient,updateUserDetails
-from routers.utils import process_bus_service, queryAPI
+from routers.utils import process_bus_service, queryAPI, natural_sort_key
 import asyncio
 from typing import Optional
 
@@ -107,7 +107,8 @@ async def get_bus_timing(busstopcode: str, busservicenos: str, userID: Optional[
             ]
 
         results = await asyncio.gather(*tasks)
-        returnResponse = [res for res in results if res]
+        flattenedResults = [res for res in results if res]
+        sorted_data = sorted(flattenedResults, key=lambda x: natural_sort_key(x["serviceNo"]))
 
         # Background tasks for I/O operations to increase efficiency
         if userID is not None:
@@ -115,7 +116,7 @@ async def get_bus_timing(busstopcode: str, busservicenos: str, userID: Optional[
             asyncio.create_task(asyncio.to_thread(createRequest, busstopcode, busservicenos, userID))
             asyncio.create_task(asyncio.to_thread(updateUserDetails, userID))
 
-        return returnResponse
+        return sorted_data
 
     except Exception as e:
         print(f"Error retrieving bus service timing: {e}")
