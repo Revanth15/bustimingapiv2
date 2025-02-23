@@ -21,7 +21,8 @@ async def extract_bus_stops():
 
     # Check if bus stops are already extracted
     try:
-        existing_busstops = await asyncio.to_thread(dbClient.collection("busstops").get_full_list)
+        existing_busstops = dbClient.collection("busstops").get_full_list()
+        existing_busstop_master_list = dbClient.collection("jsons").get_one("busStopAvailableServices")
         bus_stop_codes = {stop.id for stop in existing_busstops}
     except Exception as e:
         print(f"Error checking PocketBase: {e}")
@@ -30,14 +31,13 @@ async def extract_bus_stops():
     # Fetch and store bus stops concurrently
     try:
         # Start parallel API calls for bus stops (using asyncio.gather)
-        tasks = []
+        results = []
         while True:
-            tasks.append(queryAPI("ltaodataservice/BusStops", {"$skip": str(counter)}))
+            result = await queryAPI("ltaodataservice/BusStops", {"$skip": str(counter)})
+            results.append(result)
             counter += 500
             if counter >= 8000:
                 break
-
-        results = await asyncio.gather(*tasks)
         
         # Flatten all the results from the API calls
         data_list = flatten([res["value"] for res in results if res.get("value")])
@@ -46,6 +46,7 @@ async def extract_bus_stops():
             return {"message": "Bus stops already extracted"}
 
         new_busstops = []
+        bus_stop_master_list = existing_busstop_master_list.__dict__["json_value"]
         for stop in data_list:
             if stop["BusStopCode"] not in bus_stop_codes:
                 new_busstops.append({
@@ -54,10 +55,11 @@ async def extract_bus_stops():
                     "latitude": stop["Latitude"],
                     "longitude": stop["Longitude"],
                     "road_name": stop["RoadName"],
+                    "bus_services": ",".join(map(str, bus_stop_master_list.get(stop["BusStopCode"], [])))
                 })
         
         if new_busstops:
-            await asyncio.to_thread(lambda: [dbClient.collection("busstops").create(busstop) for busstop in new_busstops])
+            await [dbClient.collection("busstops").create(busstop) for busstop in new_busstops]
 
         return {"message": "Bus stops extracted and stored successfully"}
     
@@ -78,7 +80,8 @@ async def get_all_bus_stops():
             "description": stop.description,
             "latitude": stop.latitude,
             "longitude": stop.longitude,
-            "road_name": stop.road_name
+            "road_name": stop.road_name,
+            "bus_services": stop.bus_services
         } for stop in bus_stops]
 
         return {"busStops": bus_stop_data}
