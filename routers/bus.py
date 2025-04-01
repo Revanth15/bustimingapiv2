@@ -6,6 +6,13 @@ dbClient = getDBClient()
 
 bus_router = APIRouter()
 
+@bus_router.get("/health")
+async def health_check():
+    """
+    Health check endpoint to ensure the API is running.
+    """
+    return {"status": "API is running"}
+
 @bus_router.get("/extractBusRoutesData")
 async def extract_bus_stops():
     """
