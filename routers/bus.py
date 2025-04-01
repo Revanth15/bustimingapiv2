@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from routers.database import getDBClient
 from routers.utils import getBusRoutesFromLTA ,getFormattedBusRoutesData
 
@@ -6,11 +6,14 @@ dbClient = getDBClient()
 
 bus_router = APIRouter()
 
-@bus_router.get("/health")
-async def health_check():
+@bus_router.api_route("/health", methods=["GET", "HEAD"])
+async def health_check(request: Request):
     """
     Health check endpoint to ensure the API is running.
+    This route will respond to both GET and HEAD requests.
     """
+    if request.method == "HEAD":
+        return {}
     return {"status": "API is running"}
 
 @bus_router.get("/extractBusRoutesData")
