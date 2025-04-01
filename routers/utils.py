@@ -113,34 +113,47 @@ async def getBusRoutesFromLTA():
 #     return bus_stop_master_list
 
 def getFormattedBusRoutesData(busRoutes: dict):
-    bus_route_dict = defaultdict(lambda: {'1': [], '2': []})  # ServiceNo -> {'1': [BusStopCodes], '2': [BusStopCodes]}
+    bus_route_dict = []  # List of service dictionaries
     bus_stop_master_list = defaultdict(list)  # BusStopCode -> List of ServiceNos
 
+    service_dict = {}  # Temporary dictionary to store services
+    
     if busRoutes:
         for service in busRoutes:
-            service_no = service.get("ServiceNo")
-            bus_stop_code = service.get("BusStopCode")
-            stop_sequence = service.get("StopSequence")
-            direction = service.get("Direction", 1)  # Default to 1 if no direction is specified
+            service_no = service.get("ServiceNo", "")
+            bus_stop_code = service.get("BusStopCode", "")
+            stop_sequence = service.get("StopSequence", 0)
+            direction = str(service.get("Direction", 1))  # Default to 1 if no direction is specified
 
-            bus_route_dict[service_no][str(direction)].append((stop_sequence, bus_stop_code))
+            if service_no not in service_dict:
+                service_dict[service_no] = {"serviceNo": service_no, "routes": []}
 
-            bus_stop_master_list[bus_stop_code].append(service_no)
+            # Find existing entry for this direction
+            route_entry = next((route for route in service_dict[service_no]["routes"] if route["direction"] == direction), None)
+            
+            if not route_entry:
+                route_entry = {"direction": direction, "busStopIDs": [], "polyline": ""}
+                service_dict[service_no]["routes"].append(route_entry)
+            
+            route_entry["busStopIDs"].append((stop_sequence, bus_stop_code))
 
-    for service_no in bus_route_dict:
-        directions = list(bus_route_dict[service_no].keys())
-        for direction in directions:
-            if bus_route_dict[service_no][direction]:
-                bus_route_dict[service_no][direction].sort(key=lambda x: x[0])
-                bus_route_dict[service_no][direction] = [bus_stop_code for _, bus_stop_code in bus_route_dict[service_no][direction]]
-            else:
-                del bus_route_dict[service_no][direction]
+            # Populate bus stop master list
+            if service_no not in bus_stop_master_list[bus_stop_code]:
+                bus_stop_master_list[bus_stop_code].append(service_no)
 
+        # Sort bus stop lists in bus_stop_master_list
+        for bus_stop in bus_stop_master_list:
+            bus_stop_master_list[bus_stop].sort()
+
+        # Sort and format bus stops in service_dict
+        for service_no in service_dict:
+            for route in service_dict[service_no]["routes"]:
+                route["busStopIDs"].sort(key=lambda x: x[0])  # Sort by StopSequence
+                route["busStopIDs"] = [bus_stop_code for _, bus_stop_code in route["busStopIDs"]]
     
-    bus_route_dict = dict(bus_route_dict)
-    bus_stop_master_list = dict(bus_stop_master_list)   
-
-    return bus_route_dict,bus_stop_master_list
+    bus_route_dict = list(service_dict.values())  # Convert service_dict to a list
+    
+    return bus_route_dict, dict(bus_stop_master_list)
         
 
 def natural_sort_key(service_no):
