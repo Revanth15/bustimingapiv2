@@ -1,7 +1,7 @@
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from routers.database import getDBClient
-from routers.utils import getBusRoutesFromLTA ,getFormattedBusRoutesData, map_bus_services, queryAPI
+from routers.utils import getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, queryAPI
 
 dbClient = getDBClient()
 
@@ -114,8 +114,7 @@ async def get_bus_services_data(overwrite: Optional[bool] = False):
                 return db_data.__dict__["json_value"]
             else:
                 # If no data in DB, fetch from API, map, and save.
-                ltaResponse = await queryAPI("ltaodataservice/BusServices", {})
-                busServices = ltaResponse.get("value", [])
+                busServices = await getBusServicesFromLTA()
                 if not busServices:
                     return []
                 camelcased_bus_services = map_bus_services(busServices)
@@ -125,8 +124,7 @@ async def get_bus_services_data(overwrite: Optional[bool] = False):
 
         else:
             # Overwrite or fetch, map, and save to DB
-            ltaResponse = await queryAPI("ltaodataservice/BusServices", {})
-            busServices = ltaResponse.get("value", [])
+            busServices = await getBusServicesFromLTA()
             if not busServices:
                 return []
             camelcased_bus_services = map_bus_services(busServices)

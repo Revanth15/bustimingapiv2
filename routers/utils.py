@@ -125,6 +125,24 @@ async def getBusRoutesFromLTA():
 
     return flattened_list
 
+async def getBusServicesFromLTA():
+    results = []
+    counter = 0
+    flatten = lambda l: [y for x in l for y in x]
+    print("Starting to fetch bus services data...")
+
+    while True:
+        print(f"Counter value: {counter}")
+        result = await queryAPI("ltaodataservice/BusServices", {"$skip": str(counter)})
+        results.append(result)
+        counter += 500
+        if counter >= 1000:
+            break
+
+    flattened_list = flatten([res["value"] for res in results if res.get("value")])
+
+    return flattened_list
+
 # def getBusStopAvailableServicesList(busRoutes: dict):
 #     bus_stop_master_list = defaultdict(list)  # BusStopCode -> List of ServiceNos
     
