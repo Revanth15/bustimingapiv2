@@ -188,3 +188,23 @@ def natural_sort_key(service_no):
     number_part = int(match.group(1))
     letter_part = match.group(2) or "" 
     return (number_part, letter_part)
+
+def map_bus_services(bus_services: list) -> list:
+    """Maps bus service data to camelCase."""
+    camelcased_bus_services = []
+    for service in bus_services:
+        camelcased_service = {
+            "serviceNo": service.get("ServiceNo"),
+            "operator": service.get("Operator"),
+            "direction": str(service.get("Direction")),
+            "category": service.get("Category"),
+            "originCode": service.get("OriginCode"),
+            "destinationCode": service.get("DestinationCode"),
+            "amPeakFreq": service.get("AM_Peak_Freq"),
+            "amOffpeakFreq": service.get("AM_Offpeak_Freq"),
+            "pmPeakFreq": service.get("PM_Peak_Freq"),
+            "pmOffpeakFreq": service.get("PM_Offpeak_Freq"),
+            "loopDesc": service.get("LoopDesc"),
+        }
+        camelcased_bus_services.append(camelcased_service)
+    return camelcased_bus_services

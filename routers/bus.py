@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException, Request
+from typing import Optional
+from fastapi import APIRouter, HTTPException, Query, Request
 from routers.database import getDBClient
-from routers.utils import getBusRoutesFromLTA ,getFormattedBusRoutesData
+from routers.utils import getBusRoutesFromLTA ,getFormattedBusRoutesData, map_bus_services, queryAPI
 
 dbClient = getDBClient()
 
@@ -100,3 +101,41 @@ async def get_bus_stop_available_busses_data():
     except Exception as e:
         print(f"Error fetching bus stop available busses data: {e}")
         raise HTTPException(status_code=500, detail="Error fetching bus stop available busses data")
+    
+@bus_router.get("/getBusServicesData")
+async def get_bus_services_data(overwrite: Optional[bool] = False):
+    print(overwrite)
+    pbKey = "busServices"
+    try:
+        if not overwrite:
+            # Get data from the database
+            db_data = dbClient.collection("jsons").get_one(pbKey)
+            if db_data.__dict__["json_value"]:
+                return db_data.__dict__["json_value"]
+            else:
+                # If no data in DB, fetch from API, map, and save.
+                ltaResponse = await queryAPI("ltaodataservice/BusServices", {})
+                busServices = ltaResponse.get("value", [])
+                if not busServices:
+                    return []
+                camelcased_bus_services = map_bus_services(busServices)
+                data_to_save = {"jsonValue": camelcased_bus_services}
+                dbClient.collection("jsons").update(pbKey, data_to_save)
+                return camelcased_bus_services
+
+        else:
+            # Overwrite or fetch, map, and save to DB
+            ltaResponse = await queryAPI("ltaodataservice/BusServices", {})
+            busServices = ltaResponse.get("value", [])
+            if not busServices:
+                return []
+            camelcased_bus_services = map_bus_services(busServices)
+            data_to_save = {"jsonValue": camelcased_bus_services}
+            dbClient.collection("jsons").update(pbKey, data_to_save)
+            return camelcased_bus_services
+
+    except HTTPException as http_exc:
+        raise http_exc
+    except Exception as e:
+        print(f"Error retrieving bus services: {e}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving bus services: {e}")
