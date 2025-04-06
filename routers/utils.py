@@ -100,7 +100,7 @@ def getBusArrivalDetails(busServiceDetails: Dict[str, Any], current_time_sg: dat
                 "busLoad": "-",
                 "busFeature": "-",
                 "busType": "-",
-                "busMonitored": "-",
+                "busMonitored": 0,
                 "busLongitude": "-",
                 "busLatitude": "-",
             })
