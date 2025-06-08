@@ -32,7 +32,7 @@ ACCOUNT_KEY = getEnvVariable("ACCOUNT_KEY")
 
 # Query LTA's API
 async def queryAPI(path, params):
-    url = "http://datamall2.mytransport.sg/" + path
+    url = "https://datamall2.mytransport.sg/" + path
     headers = {'AccountKey': ACCOUNT_KEY}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
