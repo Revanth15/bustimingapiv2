@@ -226,3 +226,53 @@ def map_bus_services(bus_services: list) -> list:
         }
         camelcased_bus_services.append(camelcased_service)
     return camelcased_bus_services
+
+def restructure_to_stops_only(raw_data: List[Dict]) -> Dict[str, Any]:
+    """
+    Restructure flat bus route data into stops-centric format only
+    """
+    stops = {}
+    
+    # Process each route entry
+    for route in raw_data:
+        service_no = route['ServiceNo']
+        bus_stop_code = route['BusStopCode']
+        direction = route['Direction']
+        
+        # Build stop structure
+        if bus_stop_code not in stops:
+            stops[bus_stop_code] = {
+                "bus_stop_code": bus_stop_code,
+                "services": {}
+            }
+        
+        # Add service info to stop
+        if service_no not in stops[bus_stop_code]["services"]:
+            stops[bus_stop_code]["services"][service_no] = {
+                "service_no": service_no,
+                "operator": route['Operator'],
+                "directions": {}
+            }
+        
+        # Add direction info to service
+        stops[bus_stop_code]["services"][service_no]["directions"][direction] = {
+            "direction": direction,
+            "stop_sequence": route['StopSequence'],
+            "distance": route['Distance'],
+            "schedules": {
+                "weekday": {
+                    "first_bus": route['WD_FirstBus'],
+                    "last_bus": route['WD_LastBus']
+                },
+                "saturday": {
+                    "first_bus": route['SAT_FirstBus'],
+                    "last_bus": route['SAT_LastBus']
+                },
+                "sunday": {
+                    "first_bus": route['SUN_FirstBus'],
+                    "last_bus": route['SUN_LastBus']
+                }
+            }
+        }
+    
+    return stops

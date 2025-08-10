@@ -1,7 +1,8 @@
+import json
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from routers.database import getDBClient
-from routers.utils import getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, queryAPI
+from routers.utils import getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, queryAPI, restructure_to_stops_only
 
 dbClient = getDBClient()
 
@@ -16,6 +17,49 @@ async def health_check(request: Request):
     if request.method == "HEAD":
         return {}
     return {"status": "API is running"}
+
+@bus_router.get("/extractBusRoutesRawData")
+async def extract_bus_routes_raw_data():
+    try:
+        bus_route_key = "busRouteRaw"
+        raw_data = await getBusRoutesFromLTA()
+        stops_data = restructure_to_stops_only(raw_data)
+        # return stops_data
+
+        formatted_dict = [
+            {
+                "id" : bus_route_key,
+                "updatingValue": {
+                    "jsonValue" : stops_data
+                }
+            }
+        ]
+
+        [dbClient.collection("jsons").update(jsonData["id"], jsonData["updatingValue"]) for jsonData in formatted_dict]
+
+        return {"message": "Extracted and stored successfully"}
+            
+    except Exception as e:
+        print(f"Error storing bus stops: {e}")
+        raise HTTPException(status_code=500, detail="Failed to extract and store bus routes data")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error restructuring data: {str(e)}")
+
+@bus_router.get("/bus-routes/stops")
+async def get_bus_routes_by_stops():
+    """
+    Get bus routes data organized by bus stops only
+    """
+    bus_route_key = "busRouteRaw"
+    try:
+        existingData = dbClient.collection("jsons").get_one(bus_route_key)
+        if existingData:
+            return existingData.__dict__["json_value"]
+        else:
+            return {"message": "No records available"}
+    except Exception as e:
+        print(f"Error fetching bus route data: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching bus route data")
 
 @bus_router.get("/extractBusRoutesData")
 async def extract_bus_stops():
