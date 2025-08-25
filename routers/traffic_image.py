@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Query
 from routers.database import getDBClient
 from routers.utils import queryAPI
 import re
+from datetime import datetime
 
 dbClient = getDBClient()
 
@@ -115,8 +116,17 @@ async def get_traffic_images():
             match = re.search(r"/(\d{4}-\d{2}-\d{2})/(\d{2}-\d{2})/", image_link)
             if match:
                 date_str, time_str = match.groups()
-                img["ImageDate"] = date_str
-                img["ImageTime"] = time_str
+                
+                # Convert time_str from "HH-MM" to "HH:MM"
+                formatted_time = time_str.replace("-", ":")
+                
+                try:
+                    img_datetime = datetime.strptime(f"{date_str} {formatted_time}", "%Y-%m-%d %H:%M")
+                    img["ImageDate"] = img_datetime.strftime("%d/%m/%y")
+                    img["ImageTime"] = img_datetime.strftime("%H:%M")
+                except ValueError:
+                    img["ImageDate"] = date_str
+                    img["ImageTime"] = formatted_time
             else:
                 img["ImageDate"] = None
                 img["ImageTime"] = None
