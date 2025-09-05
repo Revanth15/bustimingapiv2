@@ -1,35 +1,14 @@
-import json
-import os
-from dotenv import load_dotenv
-import firebase_admin
-from firebase_admin import credentials, firestore
+from dotenv import load_dotenv 
 import asyncio
 import uuid
 import datetime
 from fastapi import FastAPI, Request
+import httpx
 
 load_dotenv()
 
-firebase_json = os.environ["FIREBASE_CREDENTIALS"]
-cred_dict = json.loads(firebase_json)
-cred = credentials.Certificate(cred_dict)
-firebase_admin.initialize_app(cred)
+LOG_ENDPOINT = "https://bussinganalytics.vercel.app/api/log"
 
-db = firestore.client()
-
-log_queue = asyncio.Queue()
-
-async def log_worker():
-    while True:
-        log_data = await log_queue.get()
-        try:
-            db.collection("logs").add(log_data)
-        except Exception as e:
-            print("Log write failed:", e)
-        finally:
-            log_queue.task_done()
-
-# --- Middleware ---
 class FirebaseLoggerMiddleware:
     def __init__(self, app: FastAPI):
         self.app = app
@@ -50,9 +29,17 @@ class FirebaseLoggerMiddleware:
                     "path": request.url.path,
                     "ip": request.client.host,
                     "status_code": message["status"],
+                    "user_agent": request.headers.get("user-agent"),
                 }
-                # Fire-and-forget: push into queue
-                asyncio.create_task(log_queue.put(log_data))
+                asyncio.create_task(self._send_log(log_data))
             await send(message)
 
         await self.app(scope, receive, send_wrapper)
+
+    async def _send_log(self, log_data: dict):
+        try:
+            async with httpx.AsyncClient(timeout=2) as client:
+                await client.post(LOG_ENDPOINT, json=log_data)
+        except Exception:
+            # Fail silently
+            pass
