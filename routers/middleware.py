@@ -1,11 +1,8 @@
-from dotenv import load_dotenv 
-import asyncio
 import uuid
 import datetime
+import threading
 from fastapi import FastAPI, Request
 import httpx
-
-load_dotenv()
 
 LOG_ENDPOINT = "https://bussinganalytics.vercel.app/api/log"
 
@@ -27,19 +24,20 @@ class FirebaseLoggerMiddleware:
                     "timestamp": datetime.datetime.utcnow().isoformat(),
                     "method": request.method,
                     "path": request.url.path,
-                    "ip": request.client.host,
+                    "ip": request.client.host if request.client else None,
                     "status_code": message["status"],
                     "user_agent": request.headers.get("user-agent"),
                 }
-                asyncio.create_task(self._send_log(log_data))
+                # Fire-and-forget logging
+                threading.Thread(target=self._send_log, args=(log_data,), daemon=True).start()
+
             await send(message)
 
         await self.app(scope, receive, send_wrapper)
 
-    async def _send_log(self, log_data: dict):
+    def _send_log(self, log_data: dict):
         try:
-            async with httpx.AsyncClient(timeout=2) as client:
-                await client.post(LOG_ENDPOINT, json=log_data)
+            httpx.post(LOG_ENDPOINT, json=log_data, timeout=0.5)
         except Exception:
             # Fail silently
             pass
