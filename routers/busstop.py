@@ -38,7 +38,7 @@ async def extract_bus_stops():
             result = await queryAPI("ltaodataservice/BusStops", {"$skip": str(counter)})
             results.append(result)
             counter += 500
-            if counter >= 8000:
+            if counter >= 10000:
                 break
         
         # Flatten all the results from the API calls
