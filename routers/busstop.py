@@ -4,70 +4,153 @@ from routers.database import createRequest, getDBClient,updateUserDetails
 from routers.utils import process_bus_service, queryAPI, natural_sort_key
 import asyncio
 from typing import Optional
+import logging
 
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 dbClient = getDBClient()
 
 busStops_router = APIRouter()
 SINGAPORE_TZ = timezone(timedelta(hours=8))
 
+async def _run_in_batches(func, items, batch_size=100, delay=0.01):
+    results = []
+    for i in range(0, len(items), batch_size):
+        batch = items[i:i+batch_size]
+        batch_results = []
+        for item in batch:
+            try:
+                res = await asyncio.to_thread(func, item)
+                batch_results.append(res)
+                await asyncio.sleep(delay)
+            except Exception as e:
+                batch_results.append(e)
+        results.extend(batch_results)
+        logger.info(f"Processed batch {i}-{i+len(batch)-1}")
+    return results
+
 @busStops_router.get("/extractbusstops")
 async def extract_bus_stops():
     """
-    Extract bus stop data from the external API and store it in PocketBase.
+    Extract bus stop data from the external API and store/update it in PocketBase.
     """
     counter = 0
-    data_list = []
     flatten = lambda l: [y for x in l for y in x]
 
-    # Check if bus stops are already extracted
     try:
+        # Get all existing bus stops
+        logger.info("Fetching existing bus stops from PocketBase...")
         existing_busstops = dbClient.collection("busstops").get_full_list()
-        existing_busstop_master_list = dbClient.collection("jsons").get_one("busStopAvailableServices")
-        bus_stop_codes = {stop.id for stop in existing_busstops}
+        existing_busstop_master_list = dbClient.collection("jsons").get_one("busStopAvailableServicesUpdated")
+
+        # Map: busStopCode -> record
+        bus_stop_map = {stop.id: stop for stop in existing_busstops}
+        bus_stop_master_list = existing_busstop_master_list.__dict__["json_value"]
+
     except Exception as e:
         print(f"Error checking PocketBase: {e}")
         raise HTTPException(status_code=500, detail="Failed to check existing bus stops")
 
-    # Fetch and store bus stops concurrently
     try:
-        # Start parallel API calls for bus stops (using asyncio.gather)
+        # Fetch bus stops from API
+        logger.info("Fetching bus stops from LTA API...")
         results = []
         while True:
             result = await queryAPI("ltaodataservice/BusStops", {"$skip": str(counter)})
             results.append(result)
             counter += 500
+            logger.debug(f"Fetched {len(result.get('value', []))} bus stops at offset {counter}")
             if counter >= 10000:
                 break
-        
-        # Flatten all the results from the API calls
-        data_list = flatten([res["value"] for res in results if res.get("value")])
 
-        if len(data_list) == len(bus_stop_codes):
-            return {"message": "Bus stops already extracted"}
+        # Flatten results
+        data_list = flatten([res["value"] for res in results if res.get("value")])
+        logger.info(f"Fetched total {len(data_list)} bus stops from API")
 
         new_busstops = []
-        bus_stop_master_list = existing_busstop_master_list.__dict__["json_value"]
-        for stop in data_list:
-            if stop["BusStopCode"] not in bus_stop_codes:
-                new_busstops.append({
-                    "id": stop["BusStopCode"],
-                    "description": stop["Description"],
-                    "latitude": stop["Latitude"],
-                    "longitude": stop["Longitude"],
-                    "road_name": stop["RoadName"],
-                    "bus_services": ",".join(map(str, bus_stop_master_list.get(stop["BusStopCode"], [])))
-                })
-        
-        if new_busstops:
-            await [dbClient.collection("busstops").create(busstop) for busstop in new_busstops]
+        updated_busstops = []
 
-        return {"message": "Bus stops extracted and stored successfully"}
-    
+        for stop in data_list:
+            stop_id = stop["BusStopCode"]
+            bus_services = ",".join(map(str, bus_stop_master_list.get(stop_id, [])))
+
+            new_data = {
+                "id": stop_id,
+                "description": stop["Description"],
+                "latitude": stop["Latitude"],
+                "longitude": stop["Longitude"],
+                "road_name": stop["RoadName"],
+                "bus_services": bus_services
+            }
+
+            if stop_id not in bus_stop_map:
+                # New bus stop
+                new_busstops.append(new_data)
+            else:
+                # Compare with existing record
+                existing = bus_stop_map[stop_id]
+                existing_data = {
+                    "description": existing.description,
+                    "latitude": existing.latitude,
+                    "longitude": existing.longitude,
+                    "road_name": existing.road_name,
+                    "bus_services": existing.bus_services,
+                }
+
+                if existing_data != {k: v for k, v in new_data.items() if k != "id"}:
+                    updated_busstops.append(new_data)
+
+        logger.info(f"{len(new_busstops)} new bus stops to insert")
+        logger.info(f"{len(updated_busstops)} existing bus stops to update")
+
+        if new_busstops:
+            logger.info("Creating new bus stops (batched)...")
+            # func for create expects a dict
+            def _create_func(data):
+                return dbClient.collection("busstops").create(data)
+
+            create_results = await _run_in_batches(_create_func, new_busstops, batch_size=50)
+            for i, res in enumerate(create_results):
+                if isinstance(res, Exception):
+                    logger.error(f"Failed to create {new_busstops[i]['id']}: {res}")
+                else:
+                    logger.debug(f"Created {new_busstops[i]['id']}")
+
+        # === Update changed bus stops in batches ===
+        if updated_busstops:
+            logger.info("Updating existing bus stops (batched)...")
+            # wrapper to match _run_in_batches signature: expects single arg
+            def _update_func(payload):
+                _id, data = payload["id"], payload
+                return dbClient.collection("busstops").update(_id, data)
+
+            update_payloads = updated_busstops  # each item contains id and fields
+            update_results = await _run_in_batches(_update_func, update_payloads, batch_size=50)
+            for i, res in enumerate(update_results):
+                if isinstance(res, Exception):
+                    logger.error(f"Failed to update {update_payloads[i]['id']}: {res}")
+                else:
+                    logger.debug(f"Updated {update_payloads[i]['id']}")
+
+        logger.info("Bus stop extraction & update completed successfully")
+
+        return {
+            "message": f"Bus stops processed successfully",
+            "new": len(new_busstops),
+            "updated": len(updated_busstops)
+        }
+
     except Exception as e:
         print(f"Error storing bus stops: {e}")
         raise HTTPException(status_code=500, detail="Failed to extract and store bus stops")
+
 
 @busStops_router.get("/getallbusstops")
 async def get_all_bus_stops():

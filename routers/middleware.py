@@ -27,6 +27,8 @@ class FirebaseLoggerMiddleware:
                     "ip": request.client.host if request.client else None,
                     "status_code": message["status"],
                     "user_agent": request.headers.get("user-agent"),
+                    "params": dict(request.query_params),
+                    "route_path": getattr(request.scope.get("route"), "path", None)
                 }
                 # Fire-and-forget logging
                 threading.Thread(target=self._send_log, args=(log_data,), daemon=True).start()
