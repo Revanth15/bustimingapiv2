@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import sys
 from fastapi import APIRouter, HTTPException
 from routers.database import createRequest, getDBClient,updateUserDetails
 from routers.utils import process_bus_service, queryAPI, natural_sort_key
@@ -6,14 +7,37 @@ import asyncio
 from typing import Optional
 import logging
 
-if not logging.getLogger().handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+logger = logging.getLogger()
+
+# Prevent duplicate handlers (important in serverless environments)
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
+
+    # Create stdout handler for INFO and below
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setLevel(logging.DEBUG)
+
+    # Filter: only allow INFO and DEBUG to stdout
+    stdout_handler.addFilter(lambda record: record.levelno <= logging.INFO)
+
+    # Create stderr handler for WARNING and above
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setLevel(logging.WARNING)
+
+    # Define common log format
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     )
 
+    stdout_handler.setFormatter(formatter)
+    stderr_handler.setFormatter(formatter)
+
+    # Add handlers to the root logger
+    logger.addHandler(stdout_handler)
+    logger.addHandler(stderr_handler)
+
+# Get a module-specific logger
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 dbClient = getDBClient()
 

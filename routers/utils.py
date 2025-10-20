@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+import json
+import geopandas as gpd
 import os
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
@@ -276,3 +278,65 @@ def restructure_to_stops_only(raw_data: List[Dict]) -> Dict[str, Any]:
         }
     
     return stops
+
+def shapefile_to_station_json_clean(folder_path, shapefile_name, json_file):
+    """
+    Reads a shapefile of train station exits, converts coordinates to lat/lon,
+    removes 'MRT STATION'/'LRT STATION' from station names,
+    and outputs a JSON with station names and their exits.
+    """
+    # --- CHECK FOLDER AND FILE ---
+    if not os.path.exists(folder_path):
+        raise FileNotFoundError(f"Folder not found: {folder_path}")
+
+    shapefile_path = os.path.join(folder_path, shapefile_name)
+    if not os.path.exists(shapefile_path):
+        raise FileNotFoundError(f"Shapefile not found: {shapefile_path}")
+
+    print("Folder and shapefile found.")
+    print("Files in folder:", os.listdir(folder_path))
+
+    # --- READ SHAPEFILE ---
+    gdf = gpd.read_file(shapefile_path)
+
+    # --- BASIC INFO ---
+    print("\n--- Shapefile Info ---")
+    print("Columns:", gdf.columns)
+    print("CRS:", gdf.crs)
+    print("Number of features:", len(gdf))
+    print("First 5 rows:\n", gdf.head())
+
+    # --- CONVERT TO LAT/LON (WGS84) IF NEEDED ---
+    if gdf.crs != "EPSG:4326":
+        gdf = gdf.to_crs(epsg=4326)
+        print("\nConverted CRS to WGS84 (EPSG:4326).")
+
+    # --- BUILD JSON STRUCTURE ---
+    stations_dict = {}
+    for _, row in gdf.iterrows():
+        # Remove 'MRT STATION' or 'LRT STATION' from station name
+        name = re.sub(r'\s*(MRT|LRT) STATION', '', row["stn_name"], flags=re.IGNORECASE).strip()
+
+        exit_info = {
+            "exit_code": row["exit_code"],
+            "lon": row.geometry.x,
+            "lat": row.geometry.y
+        }
+        if name not in stations_dict:
+            stations_dict[name] = {"station": [exit_info]}
+        else:
+            stations_dict[name]["station"].append(exit_info)
+
+    # --- SAVE TO JSON ---
+    with open(json_file, "w", encoding="utf-8") as f:
+        json.dump(stations_dict, f, ensure_ascii=False, indent=4)
+
+    print(f"\nJSON saved to {json_file}")
+    return stations_dict
+
+# --- USAGE EXAMPLE ---
+folder_path = "TrainStationExit_Feb2025"
+shapefile_name = "Train_Station_Exit_Layer.shp"
+json_file = "stations.json"
+
+stations_json = shapefile_to_station_json_clean(folder_path, shapefile_name, json_file)

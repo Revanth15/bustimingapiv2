@@ -6,3 +6,6 @@ __pycache__/
 test.ipynb
 *.json
 test.py
+
+TrainStationExit_Feb2025/
+stations.csv
