@@ -1,8 +1,9 @@
 import json
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from routers.database import getDBClient
-from routers.utils import getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, queryAPI, restructure_to_stops_only
+from routers.utils import cache_headers, getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, queryAPI, restructure_to_stops_only
 
 dbClient = getDBClient()
 
@@ -54,7 +55,7 @@ async def get_bus_routes_by_stops():
     try:
         existingData = dbClient.collection("jsons").get_one(bus_route_key)
         if existingData:
-            return existingData.__dict__["json_value"]
+            JSONResponse(content=existingData.__dict__["json_value"], headers=cache_headers())
         else:
             return {"message": "No records available"}
     except Exception as e:
