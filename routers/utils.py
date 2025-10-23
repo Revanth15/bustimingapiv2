@@ -279,6 +279,9 @@ def restructure_to_stops_only(raw_data: List[Dict]) -> Dict[str, Any]:
     
     return stops
 
+def cache_headers(ttl_seconds: int = 86400):
+    return {"Cache-Control": f"public, s-maxage={ttl_seconds}, stale-while-revalidate={ttl_seconds}"}
+
 # def shapefile_to_station_json_clean(folder_path, shapefile_name, json_file):
 #     """
 #     Reads a shapefile of train station exits, converts coordinates to lat/lon,

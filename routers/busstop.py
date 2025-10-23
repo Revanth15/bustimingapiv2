@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta, timezone
 import sys
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 from routers.database import createRequest, getDBClient,updateUserDetails
-from routers.utils import process_bus_service, queryAPI, natural_sort_key
+from routers.utils import cache_headers, process_bus_service, queryAPI, natural_sort_key
 import asyncio
 from typing import Optional
 import logging
@@ -193,7 +194,8 @@ async def get_all_bus_stops():
             "bus_services": stop.bus_services
         } for stop in bus_stops]
 
-        return {"busStops": bus_stop_data}
+        # return {"busStops": bus_stop_data}
+        return JSONResponse(content={"busStops": bus_stop_data}, headers=cache_headers())
     
     except Exception as e:
         print(f"Error retrieving bus stops: {e}")
