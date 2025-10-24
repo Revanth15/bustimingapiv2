@@ -56,8 +56,8 @@ async def get_bus_routes_by_stops():
         existingData = dbClient.collection("jsons").get_one(bus_route_key)
         # print(existingData.__dict__)
         if existingData:
-            return existingData.__dict__["json_value"]
-            # JSONResponse(content=existingData.__dict__["json_value"], headers=cache_headers())
+            # return existingData.__dict__["json_value"]
+            JSONResponse(content=existingData.__dict__["json_value"], headers=cache_headers())
         else:
             return {"message": "No records available"}
     except Exception as e:
@@ -128,7 +128,8 @@ async def get_bus_route_data():
     try:
         existingData = dbClient.collection("jsons").get_one(key)
         if existingData:
-            return existingData.__dict__["json_value"]
+            # return existingData.__dict__["json_value"]
+            JSONResponse(content=existingData.__dict__["json_value"], headers=cache_headers())
         else:
             return {"message": "No records available"}
     except Exception as e:
