@@ -57,7 +57,10 @@ async def get_bus_routes_by_stops():
         # print(existingData.__dict__)
         if existingData:
             # return existingData.__dict__["json_value"]
-            JSONResponse(content=existingData.__dict__["json_value"], headers=cache_headers())
+            data = existingData.__dict__["json_value"]
+            if isinstance(data, str):
+                data = json.loads(data)
+            return JSONResponse(content=data, headers=cache_headers())
         else:
             return {"message": "No records available"}
     except Exception as e:
@@ -129,7 +132,10 @@ async def get_bus_route_data():
         existingData = dbClient.collection("jsons").get_one(key)
         if existingData:
             # return existingData.__dict__["json_value"]
-            JSONResponse(content=existingData.__dict__["json_value"], headers=cache_headers())
+            data = existingData.__dict__["json_value"]
+            if isinstance(data, str):
+                data = json.loads(data)
+            return JSONResponse(content=data, headers=cache_headers())
         else:
             return {"message": "No records available"}
     except Exception as e:
@@ -159,7 +165,11 @@ async def get_bus_services_data(overwrite: Optional[bool] = False):
             # Get data from the database
             db_data = dbClient.collection("jsons").get_one(pbKey)
             if db_data.__dict__["json_value"]:
-                return db_data.__dict__["json_value"]
+                data = db_data.__dict__["json_value"]
+                if isinstance(data, str):
+                    data = json.loads(data)
+                return JSONResponse(content=data, headers=cache_headers())
+                # return db_data.__dict__["json_value"]
             else:
                 # If no data in DB, fetch from API, map, and save.
                 busServices = await getBusServicesFromLTA()
