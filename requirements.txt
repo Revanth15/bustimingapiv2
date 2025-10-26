@@ -17,9 +17,12 @@ markdown-it-py==3.0.0
 MarkupSafe==3.0.2
 mdurl==0.1.2
 pocketbase==0.14.0
+pydantic==2.12.3
+pydantic_core==2.41.4
 Pygments==2.18.0
 python-dotenv==1.0.1
 python-multipart==0.0.19
+pytz==2025.2
 PyYAML==6.0.2
 requests==2.32.3
 rich==13.9.4
