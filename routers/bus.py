@@ -1,7 +1,11 @@
+from datetime import datetime
 import json
-from typing import Optional
+from typing import List, Optional
+import uuid
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+import pytz
 from routers.database import getDBClient
 from routers.utils import cache_headers, getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, queryAPI, restructure_to_stops_only
 
@@ -25,44 +29,53 @@ async def extract_bus_routes_raw_data():
         bus_route_key = "busRouteRaw"
         raw_data = await getBusRoutesFromLTA()
         stops_data = restructure_to_stops_only(raw_data)
-        # return stops_data
 
-        formatted_dict = [
+        sgt_timezone = pytz.timezone("Asia/Singapore")
+        current_timestamp = datetime.now(sgt_timezone).isoformat()
+
+        formatted_data = [
             {
-                "id" : bus_route_key,
-                "updatingValue": {
-                    "jsonValue" : stops_data
-                }
+                "id": str(bus_stop_code),
+                "bus_stop_code": str(bus_stop_code),
+                "json_value": json.dumps(bus_stop_data),  # Convert dict to JSON string
+                "modified_at": current_timestamp
             }
+            for bus_stop_code, bus_stop_data in stops_data.items()
         ]
 
-        [dbClient.collection("jsons").update(jsonData["id"], jsonData["updatingValue"]) for jsonData in formatted_dict]
+        # Upsert data into the bus_route_raw table
+        response = dbClient.table("bus_route_raw").upsert(
+            formatted_data,
+            on_conflict="id"  # Update if id already exists
+        ).execute()
+
+        # # Check if the operation was successful
+        if not response.data:
+            raise HTTPException(status_code=500, detail="Failed to store bus routes data in Supabase")
 
         return {"message": "Extracted and stored successfully"}
-            
+
     except Exception as e:
-        print(f"Error storing bus stops: {e}")
-        raise HTTPException(status_code=500, detail="Failed to extract and store bus routes data")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error restructuring data: {str(e)}")
+        print(f"Error processing bus routes data: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 @bus_router.get("/bus-routes/stops")
 async def get_bus_routes_by_stops():
     """
-    Get bus routes data organized by bus stops only
+    Get bus routes data organized by bus stops only.
     """
-    bus_route_key = "busRouteRaw"
     try:
-        existingData = dbClient.collection("jsons").get_one(bus_route_key)
-        # print(existingData.__dict__)
-        if existingData:
-            # return existingData.__dict__["json_value"]
-            data = existingData.__dict__["json_value"]
-            if isinstance(data, str):
-                data = json.loads(data)
-            return JSONResponse(content=data, headers=cache_headers())
-        else:
+        response = dbClient.table("bus_route_raw").select("bus_stop_code, json_value").execute()
+
+        if not response.data:
             return {"message": "No records available"}
+
+        combined_data = {
+            row["bus_stop_code"]: json.loads(row["json_value"]) 
+            for row in response.data
+        }
+        return JSONResponse(content=combined_data, headers=cache_headers())
+
     except Exception as e:
         print(f"Error fetching bus route data: {e}")
         raise HTTPException(status_code=500, detail="Error fetching bus route data")
@@ -70,74 +83,109 @@ async def get_bus_routes_by_stops():
 @bus_router.get("/extractBusRoutesData")
 async def extract_bus_stops():
     """
-    Extract bus routes data
+    Extract bus routes data and upsert into Supabase if not already extracted.
+    - Checks if bus_routes and jsons tables have data.
+    - Upserts formatted_bus_route_data into bus_routes table.
+    - Upserts formatted_bus_stop_available_services into jsons table.
+    - Includes modified_at timestamp in SGT (GMT+8).
+    - Avoids overwriting existing data.
     """
-    """
-    -check if alr extracted, extract and process if not
-    -do an update everyweek automatically
-    """
-
     bus_route_key = "busRoute"
     bus_stop_available_services_key = "busStopAvailableServices"
 
-    # Check if busRoutes are already extracted
     try:
-        existingBusRoutes = dbClient.collection("jsons").get_one(bus_route_key)
-        existingBusStopAvailableServicesData = dbClient.collection("jsons").get_one(bus_stop_available_services_key)
+        # Check if data exists in bus_routes table
+        bus_routes_check = dbClient.table("bus_route").select("service_no", count="exact").limit(1).execute()
+        bus_routes_exists = bus_routes_check.count > 0
 
-        existingBusRoutesDict = existingBusRoutes.__dict__
-        existingBusStopAvailableServicesDataDict = existingBusStopAvailableServicesData.__dict__
-    except Exception as e:
-        print(f"Error checking PocketBase: {e}")
-        raise HTTPException(status_code=500, detail="Failed to check existing bus route data")
+        # Check if data exists in jsons table for bus_stop_available_services_key
+        jsons_check = dbClient.table("jsons").select("id").eq("id", bus_stop_available_services_key).execute()
+        jsons_exists = len(jsons_check.data) > 0
 
-    try:
-        if not existingBusRoutesDict["json_value"] and not existingBusStopAvailableServicesDataDict["json_value"]:
-            raw_bus_route_data = await getBusRoutesFromLTA()
-            formatted_bus_route_data, formatted_bus_stop_available_services = getFormattedBusRoutesData(raw_bus_route_data)
-
-            formatted_dict = [
-                {
-                    "id" : bus_route_key,
-                    "updatingValue": {
-                        "jsonValue" : formatted_bus_route_data
-                    }
-                },
-                {
-                    "id" : bus_stop_available_services_key,
-                    "updatingValue": {
-                        "jsonValue" : formatted_bus_stop_available_services
-                    }
-                }
-            ]
-
-            print(formatted_dict)
-
-
-            [dbClient.collection("jsons").update(jsonData["id"], jsonData["updatingValue"]) for jsonData in formatted_dict]
-
-
-            return {"message": "Extracted and stored successfully"}
-        else:
+        # If both datasets exist, return message
+        if bus_routes_exists and jsons_exists:
             return {"message": "Already Extracted"}
-            
+
+        # If either dataset is missing, extract and upsert
+        raw_bus_route_data = await getBusRoutesFromLTA()
+        formatted_bus_route_data, formatted_bus_stop_available_services = getFormattedBusRoutesData(raw_bus_route_data)
+
+        # Get current timestamp in Singapore time (GMT+8)
+        sgt_timezone = pytz.timezone("Asia/Singapore")
+        current_timestamp = datetime.now(sgt_timezone).isoformat()
+
+        # Prepare bus routes data for upsert
+        formatted_bus_routes = [
+            {
+                "id": uuid.uuid4().hex[:12],
+                "service_no": str(bus_route["serviceNo"]),  # Ensure string format
+                "json_value": json.dumps(bus_route),  # Store full JSON object
+                "modified_at": current_timestamp
+            }
+            for bus_route in formatted_bus_route_data
+        ]
+
+        # Debug: Print number of bus routes
+        print(f"Prepared {len(formatted_bus_routes)} bus route records for upsert")
+
+        # Upsert bus routes in batches
+        batch_size = 1000
+        for i in range(0, len(formatted_bus_routes), batch_size):
+            batch = formatted_bus_routes[i:i + batch_size]
+            response = dbClient.table("bus_route").upsert(
+                batch,
+                on_conflict="service_no"
+            ).execute()
+
+            # Debug: Print batch progress
+            print(f"Upserted bus routes batch {i // batch_size + 1}: {len(batch)} records")
+
+            # Check if the operation was successful
+            if not response.data:
+                raise HTTPException(status_code=500, detail="Failed to upsert bus routes data")
+
+        # Prepare bus stop available services data for upsert
+        formatted_bus_stop_services = {
+            "id": bus_stop_available_services_key,
+            "json_value": json.dumps(formatted_bus_stop_available_services),
+            "modified_at": current_timestamp
+        }
+
+        # Debug: Print bus stop services data
+        print(f"Prepared bus stop available services: {bus_stop_available_services_key}")
+
+        # Upsert bus stop available services
+        response = dbClient.table("jsons").upsert(
+            [formatted_bus_stop_services],
+            on_conflict="id"
+        ).execute()
+
+        # Check if the operation was successful
+        if not response.data:
+            raise HTTPException(status_code=500, detail="Failed to upsert bus stop available services data")
+
+        return {"message": "Extracted and stored successfully"}
+
     except Exception as e:
-        print(f"Error storing bus stops: {e}")
-        raise HTTPException(status_code=500, detail="Failed to extract and store bus routes data")
+        print(f"Error processing bus routes data: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     
 @bus_router.get("/getBusRoutesData")
 async def get_bus_route_data():
     key = "busRoute"
     try:
-        existingData = dbClient.collection("jsons").get_one(key)
-        if existingData:
-            # return existingData.__dict__["json_value"]
-            data = existingData.__dict__["json_value"]
-            if isinstance(data, str):
-                data = json.loads(data)
-            return JSONResponse(content=data, headers=cache_headers())
-        else:
+        response = dbClient.table("bus_route").select("service_no, json_value").execute()
+
+        if not response.data:
             return {"message": "No records available"}
+        combined_data = []
+
+        for row in response.data:
+            json_value = row["json_value"]
+            data = json.loads(json_value) if isinstance(json_value, str) else json_value
+            combined_data.append(data)
+
+        return JSONResponse(content=combined_data, headers=cache_headers())
     except Exception as e:
         print(f"Error fetching bus route data: {e}")
         raise HTTPException(status_code=500, detail="Error fetching bus route data")
@@ -146,10 +194,9 @@ async def get_bus_route_data():
 async def get_bus_stop_available_busses_data():
     key = "busStopAvailableServices"
     try:
-        existingData = dbClient.collection("jsons").get_one(key)
-        print(existingData.__dict__)
-        if existingData:
-            return existingData.__dict__["json_value"]
+        response = dbClient.table("jsons").select("json_value").eq("id", key).execute()
+        if response.data:
+            return response.data[0]["json_value"]
         else:
             return {"message": "No records available"}
     except Exception as e:
@@ -160,12 +207,15 @@ async def get_bus_stop_available_busses_data():
 async def get_bus_services_data(overwrite: Optional[bool] = False):
     print(overwrite)
     pbKey = "busServices"
+
+    sgt_timezone = pytz.timezone("Asia/Singapore")
+    current_timestamp = datetime.now(sgt_timezone).isoformat()
     try:
         if not overwrite:
             # Get data from the database
-            db_data = dbClient.collection("jsons").get_one(pbKey)
-            if db_data.__dict__["json_value"]:
-                data = db_data.__dict__["json_value"]
+            db_data = dbClient.table("jsons").select("json_value").eq("id", pbKey).execute()
+            if db_data.data[0]["json_value"]:
+                data = db_data.data[0]["json_value"]
                 if isinstance(data, str):
                     data = json.loads(data)
                 return JSONResponse(content=data, headers=cache_headers())
@@ -176,8 +226,17 @@ async def get_bus_services_data(overwrite: Optional[bool] = False):
                 if not busServices:
                     return []
                 camelcased_bus_services = map_bus_services(busServices)
-                data_to_save = {"jsonValue": camelcased_bus_services}
-                dbClient.collection("jsons").update(pbKey, data_to_save)
+                formatted_bus_stop_services = {
+                    "id": pbKey,
+                    "json_value": json.dumps(camelcased_bus_services),
+                    "modified_at": current_timestamp
+                }
+
+                # Upsert bus stop available services
+                response = dbClient.table("jsons").upsert(
+                    [formatted_bus_stop_services],
+                    on_conflict="id"
+                ).execute()
                 return camelcased_bus_services
 
         else:
@@ -186,8 +245,17 @@ async def get_bus_services_data(overwrite: Optional[bool] = False):
             if not busServices:
                 return []
             camelcased_bus_services = map_bus_services(busServices)
-            data_to_save = {"jsonValue": camelcased_bus_services}
-            dbClient.collection("jsons").update(pbKey, data_to_save)
+            formatted_bus_stop_services = {
+                "id": pbKey,
+                "json_value": json.dumps(camelcased_bus_services),
+                "modified_at": current_timestamp
+            }
+
+            # Upsert bus stop available services
+            response = dbClient.table("jsons").upsert(
+                [formatted_bus_stop_services],
+                on_conflict="id"
+            ).execute()
             return camelcased_bus_services
 
     except HTTPException as http_exc:
@@ -195,3 +263,58 @@ async def get_bus_services_data(overwrite: Optional[bool] = False):
     except Exception as e:
         print(f"Error retrieving bus services: {e}")
         raise HTTPException(status_code=500, detail=f"Error retrieving bus services: {e}")
+    
+
+class BusRoute(BaseModel):
+    serviceNo: str
+    routes: List[dict]
+
+class BusRouteBulkUpdate(BaseModel):
+    bus_routes: List[BusRoute]
+
+@bus_router.post("/bulkUpdateBusRoutes")
+async def bulk_update_bus_routes(data: BusRouteBulkUpdate):
+    """
+    Bulk update bus routes data in Supabase.
+    - Accepts a list of bus route objects with updated polyline values.
+    - Upserts into bus_route table based on service_no.
+    - Updates json_value and modified_at (SGT) for existing rows.
+    - Inserts new rows with new UUIDs for id.
+    """
+    try:
+        sgt_timezone = pytz.timezone("Asia/Singapore")
+        current_timestamp = datetime.now(sgt_timezone).isoformat()
+
+        formatted_bus_routes = [
+            {
+                "id": uuid.uuid4().hex[:12],  
+                "service_no": str(bus_route.serviceNo), 
+                "json_value": json.dumps(bus_route.dict()),
+                "modified_at": current_timestamp
+            }
+            for bus_route in data.bus_routes
+        ]
+
+        print(f"Prepared {len(formatted_bus_routes)} bus route records for upsert")
+
+        batch_size = 1000
+        for i in range(0, len(formatted_bus_routes), batch_size):
+            batch = formatted_bus_routes[i:i + batch_size]
+            response = dbClient.table("bus_route").upsert(
+                batch,
+                on_conflict="service_no"
+            ).execute()
+
+            print(f"Upserted bus routes batch {i // batch_size + 1}: {len(batch)} records")
+
+            if not response.data:
+                raise HTTPException(status_code=500, detail="Failed to upsert bus routes data")
+
+        stored_routes = dbClient.table("bus_route").select("service_no", count="exact").execute()
+        print(f"Total stored bus routes: {stored_routes.count}")
+
+        return {"message": "Bulk update successful"}
+
+    except Exception as e:
+        print(f"Error processing bulk update: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")

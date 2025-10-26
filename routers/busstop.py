@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta, timezone
+import json
 import sys
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
+import pytz
 from routers.database import createRequest, getDBClient,updateUserDetails
 from routers.utils import cache_headers, process_bus_service, queryAPI, natural_sort_key
 import asyncio
@@ -45,59 +47,60 @@ dbClient = getDBClient()
 busStops_router = APIRouter()
 SINGAPORE_TZ = timezone(timedelta(hours=8))
 
-async def _run_in_batches(func, items, batch_size=100, delay=0.01):
-    results = []
-    for i in range(0, len(items), batch_size):
-        batch = items[i:i+batch_size]
-        batch_results = []
-        for item in batch:
-            try:
-                res = await asyncio.to_thread(func, item)
-                batch_results.append(res)
-                await asyncio.sleep(delay)
-            except Exception as e:
-                batch_results.append(e)
-        results.extend(batch_results)
-        logger.info(f"Processed batch {i}-{i+len(batch)-1}")
-    return results
-
-@busStops_router.get("/extractbusstops")
+@busStops_router.get("/extractBusStops")
 async def extract_bus_stops():
     """
-    Extract bus stop data from the external API and store/update it in PocketBase.
+    Extract bus stop data from the LTA API and store/update in Supabase.
+    - Fetches bus stops from LTA API in batches.
+    - Uses bus_stop_master_list from jsons table for bus_services.
+    - Upserts into bus_stops table with id as BusStopCode (TEXT).
+    - Includes modified_at timestamp in SGT (GMT+8).
     """
-    counter = 0
-    flatten = lambda l: [y for x in l for y in x]
-
     try:
+        # Get bus_stop_master_list from jsons table
+        logger.info("Fetching bus_stop_master_list from jsons table...")
+        jsons_response = dbClient.table("jsons").select("json_value").eq("id", "busStopAvailableServices").execute()
+        if not jsons_response.data:
+            raise HTTPException(status_code=500, detail="busStopAvailableServices not found in jsons table")
+        
+        bus_stop_master_list = jsons_response.data[0]["json_value"]
+        # Parse if json_value is TEXT
+        if isinstance(bus_stop_master_list, str):
+            bus_stop_master_list = json.loads(bus_stop_master_list)
+
         # Get all existing bus stops
-        logger.info("Fetching existing bus stops from PocketBase...")
-        existing_busstops = dbClient.collection("busstops").get_full_list()
-        existing_busstop_master_list = dbClient.collection("jsons").get_one("busStopAvailableServicesUpdated")
+        logger.info("Fetching existing bus stops from Supabase...")
+        bus_stop_map = {}
+        offset = 0
+        batch_size = 1000
+        while True:
+            response = dbClient.table("bus_stops").select("id, description, latitude, longitude, road_name, bus_services").range(offset, offset + batch_size - 1).execute()
+            if not response.data:
+                break
+            for stop in response.data:
+                bus_stop_map[stop["id"]] = stop
+            offset += batch_size
+        logger.info(f"Fetched {len(bus_stop_map)} existing bus stops")
 
-        # Map: busStopCode -> record
-        bus_stop_map = {stop.id: stop for stop in existing_busstops}
-        bus_stop_master_list = existing_busstop_master_list.__dict__["json_value"]
-
-    except Exception as e:
-        print(f"Error checking PocketBase: {e}")
-        raise HTTPException(status_code=500, detail="Failed to check existing bus stops")
-
-    try:
-        # Fetch bus stops from API
+        # Fetch bus stops from LTA API
         logger.info("Fetching bus stops from LTA API...")
+        counter = 0
         results = []
         while True:
             result = await queryAPI("ltaodataservice/BusStops", {"$skip": str(counter)})
             results.append(result)
             counter += 500
             logger.debug(f"Fetched {len(result.get('value', []))} bus stops at offset {counter}")
-            if counter >= 10000:
+            if counter >= 10000:  # Adjust based on API limits
                 break
 
         # Flatten results
-        data_list = flatten([res["value"] for res in results if res.get("value")])
+        data_list = [item for res in results if res.get("value") for item in res["value"]]
         logger.info(f"Fetched total {len(data_list)} bus stops from API")
+
+        # Get current timestamp in Singapore time (GMT+8)
+        sgt_timezone = pytz.timezone("Asia/Singapore")
+        current_timestamp = datetime.now(sgt_timezone).isoformat()
 
         new_busstops = []
         updated_busstops = []
@@ -109,10 +112,11 @@ async def extract_bus_stops():
             new_data = {
                 "id": stop_id,
                 "description": stop["Description"],
-                "latitude": stop["Latitude"],
-                "longitude": stop["Longitude"],
+                "latitude": float(stop["Latitude"]),
+                "longitude": float(stop["Longitude"]),
                 "road_name": stop["RoadName"],
-                "bus_services": bus_services
+                "bus_services": bus_services,
+                "modified_at": current_timestamp
             }
 
             if stop_id not in bus_stop_map:
@@ -122,59 +126,47 @@ async def extract_bus_stops():
                 # Compare with existing record
                 existing = bus_stop_map[stop_id]
                 existing_data = {
-                    "description": existing.description,
-                    "latitude": existing.latitude,
-                    "longitude": existing.longitude,
-                    "road_name": existing.road_name,
-                    "bus_services": existing.bus_services,
+                    "description": existing["description"],
+                    "latitude": existing["latitude"],
+                    "longitude": existing["longitude"],
+                    "road_name": existing["road_name"],
+                    "bus_services": existing["bus_services"]
                 }
-
-                if existing_data != {k: v for k, v in new_data.items() if k != "id"}:
+                new_data_no_id = {k: v for k, v in new_data.items() if k not in ["id", "modified_at"]}
+                if existing_data != new_data_no_id:
                     updated_busstops.append(new_data)
 
         logger.info(f"{len(new_busstops)} new bus stops to insert")
         logger.info(f"{len(updated_busstops)} existing bus stops to update")
 
-        if new_busstops:
-            logger.info("Creating new bus stops (batched)...")
-            # func for create expects a dict
-            def _create_func(data):
-                return dbClient.collection("busstops").create(data)
+        # Upsert new and updated bus stops in batches
+        all_busstops = new_busstops + updated_busstops
+        if all_busstops:
+            logger.info("Upserting bus stops (batched)...")
+            batch_size = 1000
+            for i in range(0, len(all_busstops), batch_size):
+                batch = all_busstops[i:i + batch_size]
+                response = dbClient.table("bus_stops").upsert(
+                    batch,
+                    on_conflict="id"
+                ).execute()
+                logger.debug(f"Upserted batch {i // batch_size + 1}: {len(batch)} records")
+                if not response.data:
+                    raise HTTPException(status_code=500, detail="Failed to upsert bus stops")
 
-            create_results = await _run_in_batches(_create_func, new_busstops, batch_size=50)
-            for i, res in enumerate(create_results):
-                if isinstance(res, Exception):
-                    logger.error(f"Failed to create {new_busstops[i]['id']}: {res}")
-                else:
-                    logger.debug(f"Created {new_busstops[i]['id']}")
-
-        # === Update changed bus stops in batches ===
-        if updated_busstops:
-            logger.info("Updating existing bus stops (batched)...")
-            # wrapper to match _run_in_batches signature: expects single arg
-            def _update_func(payload):
-                _id, data = payload["id"], payload
-                return dbClient.collection("busstops").update(_id, data)
-
-            update_payloads = updated_busstops  # each item contains id and fields
-            update_results = await _run_in_batches(_update_func, update_payloads, batch_size=50)
-            for i, res in enumerate(update_results):
-                if isinstance(res, Exception):
-                    logger.error(f"Failed to update {update_payloads[i]['id']}: {res}")
-                else:
-                    logger.debug(f"Updated {update_payloads[i]['id']}")
-
-        logger.info("Bus stop extraction & update completed successfully")
+        # Verify stored data
+        stored_busstops = dbClient.table("bus_stops").select("id", count="exact").execute()
+        logger.info(f"Total stored bus stops: {stored_busstops.count}")
 
         return {
-            "message": f"Bus stops processed successfully",
+            "message": "Bus stops processed successfully",
             "new": len(new_busstops),
             "updated": len(updated_busstops)
         }
 
     except Exception as e:
-        print(f"Error storing bus stops: {e}")
-        raise HTTPException(status_code=500, detail="Failed to extract and store bus stops")
+        logger.error(f"Error processing bus stops: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
 @busStops_router.get("/getallbusstops")
@@ -183,16 +175,17 @@ async def get_all_bus_stops():
     Retrieve all bus stop information stored in PocketBase.
     """
     try:
-        bus_stops = dbClient.collection("busstops").get_full_list(2500)
-        
-        bus_stop_data = [{
-            "id": stop.id,
-            "description": stop.description,
-            "latitude": stop.latitude,
-            "longitude": stop.longitude,
-            "road_name": stop.road_name,
-            "bus_services": stop.bus_services
-        } for stop in bus_stops]
+        response = dbClient.table("bus_stops").select("id, description, latitude, longitude, road_name, bus_services").execute()
+        bus_stop_data = []
+        for stop in response.data:
+            bus_stop_data.append({
+                "id": stop["id"],
+                "description": stop["description"],
+                "latitude": stop["latitude"],
+                "longitude": stop["longitude"],
+                "road_name": stop["road_name"],
+                "bus_services": stop["bus_services"]
+            })
 
         # return {"busStops": bus_stop_data}
         return JSONResponse(content={"busStops": bus_stop_data}, headers=cache_headers())
