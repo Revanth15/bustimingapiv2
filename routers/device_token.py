@@ -33,17 +33,17 @@ async def register_device_token(device: DeviceToken):
         response = supabase.table("devices").upsert(
             [device_data],
             on_conflict="id",
-            ignore_duplicates=False, 
+            ignore_duplicates=True, 
             returning="minimal" 
         ).execute()
 
         # Check if the operation was successful
-        if not response.data:
-            existing = supabase.table("devices").select("id").eq("id", device.token).execute()
-            if existing.data:
-                print(f"Token {device.token} updated successfully")
-            else:
-                raise HTTPException(status_code=500, detail="Failed to store device token")
+        # if not response.data:
+        #     existing = supabase.table("devices").select("id").eq("id", device.token).execute()
+        #     if existing.data:
+        #         print(f"Token {device.token} updated successfully")
+        #     else:
+        #         raise HTTPException(status_code=500, detail="Failed to store device token")
 
         print(f"Stored/Updated device token: {device.token}")
 
