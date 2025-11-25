@@ -11,6 +11,10 @@ supabase = getDBClient()
 
 class DeviceToken(BaseModel):
     token: str
+    device_type: str
+    device_model: str
+    system_version: str
+    app_version: str
 
 @device_token_router.post("/registerDeviceToken")
 async def register_device_token(device: DeviceToken):
@@ -26,6 +30,10 @@ async def register_device_token(device: DeviceToken):
 
         device_data = {
             "id": device.token,
+            "device_type": device.device_type,
+            "device_model": device.device_model,
+            "system_version": device.system_version,
+            "app_version": device.app_version,
             "registered_date": current_timestamp
         }
 
@@ -33,7 +41,7 @@ async def register_device_token(device: DeviceToken):
         response = supabase.table("devices").upsert(
             [device_data],
             on_conflict="id",
-            ignore_duplicates=True, 
+            ignore_duplicates=False, 
             returning="minimal" 
         ).execute()
 
