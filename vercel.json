@@ -8,14 +8,6 @@
     ],
     "env": {
       "APP_MODULE": "main:app"
-    },
-    "headers": [
-    {
-      "source": "/getBusRoutesData",
-      "headers": [
-        { "key": "Cache-Control", "value": "public, s-maxage=86400, stale-while-revalidate=86400" }
-      ]
     }
-  ]
   }
   
