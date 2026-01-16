@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pocketbase import PocketBase
 from dotenv import load_dotenv
 from routers.schemas import BusTimingRequest, User
-from routers.utils import getBusArrivalDetails, queryAPI, getEnvVariable, timeDifferenceToNowSg
+from routers.utils import queryAPI, getEnvVariable, timeDifferenceToNowSg
 from supabase import create_client, Client
 
 load_dotenv()

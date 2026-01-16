@@ -5,7 +5,9 @@ __pycache__/
 .env
 test.ipynb
 *.json
+*.geoJson
 test.py
 
 TrainStationExit_Feb2025/
+TrainStation_Aug2025/
 stations.csv

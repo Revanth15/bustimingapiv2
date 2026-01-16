@@ -64,50 +64,41 @@ def timeDifferenceToNowSg(target_time_str: str, current_time_sg: datetime) -> in
         return -100 # Indicate error or invalid time
 
 async def process_bus_service(busService: Dict[str, Any], current_time_sg: datetime) -> Optional[Dict[str, Any]]:
-    """Processes a single bus service dictionary."""
-    busArrivalTimeDetails = getBusArrivalDetails(busService, current_time_sg)
-    # Filter here if needed:
-    # if not any(detail['busArrivalTime'] != -100 for detail in busArrivalTimeDetails):
-    #     return None
-
-    return {
-        "serviceNo": busService.get("ServiceNo", "N/A"),
-        "serviceDetails": busArrivalTimeDetails
-    }
-
-
-def getBusArrivalDetails(busServiceDetails: Dict[str, Any], current_time_sg: datetime) -> List[Dict[str, Any]]:
-    """Processes arrival details for a single bus service."""
-    noOfBuses = ['NextBus', 'NextBus2', 'NextBus3']
-    busArrivalDetails = []
-
-    for key in noOfBuses:
-        busData = busServiceDetails.get(key, {})
-        estimated_arrival = busData.get('EstimatedArrival', '')
-
-        if estimated_arrival:
-            arrival_time_mins = timeDifferenceToNowSg(estimated_arrival, current_time_sg)
-            busArrivalDetails.append({
-                "busArrivalTime": arrival_time_mins,
-                "busLoad": busData.get("Load", "-"), 
-                "busFeature": busData.get("Feature", "-"),
-                "busType": busData.get("Type", "-"),
-                "busMonitored": busData.get("Monitored", "-"),
-                "busLongitude": busData.get("Longitude", "-"),
-                "busLatitude": busData.get("Latitude", "-"),
+    """Processes a single bus service with minimal overhead."""
+    if not (service_no := busService.get("ServiceNo")):
+        return None
+    
+    arrival_details = []
+    for key in ('NextBus', 'NextBus2', 'NextBus3'):
+        bus_data = busService.get(key)
+        
+        if bus_data and (estimated := bus_data.get('EstimatedArrival')):
+            arrival_details.append({
+                "busArrivalTime": timeDifferenceToNowSg(estimated, current_time_sg),
+                "busLoad": bus_data.get("Load", "-"),
+                "busFeature": bus_data.get("Feature", "-"),
+                "busType": bus_data.get("Type", "-"),
+                "busMonitored": bus_data.get("Monitored", 0),
+                "busLongitude": bus_data.get("Longitude", "-"),
+                "busLatitude": bus_data.get("Latitude", "-"),
             })
         else:
-            busArrivalDetails.append({
-                "busArrivalTime": -100,
-                "busLoad": "-",
-                "busFeature": "-",
-                "busType": "-",
-                "busMonitored": 0,
-                "busLongitude": "-",
-                "busLatitude": "-",
-            })
-    return busArrivalDetails
+            arrival_details.append(DEFAULT_BUS.copy())
+    
+    return {
+        "serviceNo": service_no,
+        "serviceDetails": arrival_details
+    }
 
+DEFAULT_BUS = {
+    "busArrivalTime": -100,
+    "busLoad": "-",
+    "busFeature": "-",
+    "busType": "-",
+    "busMonitored": 0,
+    "busLongitude": "-",
+    "busLatitude": "-",
+}
 
 async def getBusRoutesFromLTA():
     results = []

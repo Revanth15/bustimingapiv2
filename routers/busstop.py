@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import json
 import sys
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import JSONResponse
 import pytz
 from routers.database import createRequest, getDBClient,updateUserDetails
@@ -195,46 +195,48 @@ async def get_all_bus_stops():
         raise HTTPException(status_code=500, detail="Failed to retrieve bus stops")
 
 @busStops_router.get("/bustiming")
-async def get_bus_timing(busstopcode: str, busservicenos: str, userID: Optional[str] = None):
-    if not busstopcode.isdigit() or len(busstopcode) != 5:
-         raise HTTPException(status_code=400, detail="Invalid BusStopCode format.")
-
-    requestedBusList = {i for i in busservicenos.split(',') if i}
-    process_all = "all" in requestedBusList
-
-    current_time_sg = datetime.now(SINGAPORE_TZ)
-
+async def get_bus_timing(
+    busstopcode: str = Query(..., regex=r'^\d{5}$'),
+    busservicenos: str = Query(...),
+    userID: Optional[str] = None,
+    background_tasks: BackgroundTasks = None
+):
+    requested = set(busservicenos.split(',')) - {''}
+    if not requested:
+        raise HTTPException(400, "No bus services specified")
+    
+    process_all = "all" in requested
+    
     try:
-        ltaResponse = await queryAPI("ltaodataservice/v3/BusArrival", {"BusStopCode": busstopcode})
-
-        busServices = ltaResponse.get("Services", [])
-        if not busServices:
-             return []
-
-        tasks = []
-        for busService in busServices:
-            service_no = busService.get("ServiceNo")
-            if service_no and (process_all or service_no in requestedBusList):
-                tasks.append(process_bus_service(busService, current_time_sg))
-
-        if not tasks:
+        response = await queryAPI("ltaodataservice/v3/BusArrival", {"BusStopCode": busstopcode})
+        services = response.get("Services", [])
+        
+        if not services:
             return []
-
-        results = await asyncio.gather(*tasks)
-
-        valid_results = [res for res in results if res]
-
-        sorted_data = sorted(valid_results, key=lambda x: natural_sort_key(x["serviceNo"]))
+        
+        current_time = datetime.now(SINGAPORE_TZ)
+        
+        results = await asyncio.gather(*[
+            process_bus_service(s, current_time)
+            for s in services
+            if (no := s.get("ServiceNo")) and (process_all or no in requested)
+        ])
+        
+        # Filter None and sort
+        valid = sorted(
+            (r for r in results if r),
+            key=lambda x: natural_sort_key(x["serviceNo"])
+        )
 
         # Background tasks for non-critical I/O
-        if userID is not None:
-            asyncio.create_task(createRequest(busstopcode, busservicenos, userID))
-            asyncio.create_task(updateUserDetails(userID))
-
-        return sorted_data
-
-    except HTTPException as http_exc:
-        raise http_exc
+        # if userID is not None:
+        #     asyncio.create_task(createRequest(busstopcode, busservicenos, userID))
+        #     asyncio.create_task(updateUserDetails(userID))
+        
+        return valid
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Error retrieving bus service timing for stop {busstopcode}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error retrieving bus service timing: {e}")
+        print(f"Error: {busstopcode} - {e}", file=sys.stderr)
+        raise HTTPException(500, "Service unavailable")

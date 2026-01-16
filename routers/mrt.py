@@ -1,9 +1,13 @@
 from datetime import datetime, timedelta, timezone
+import json
 import time
 from fastapi import APIRouter, HTTPException, Query
-from routers.utils import queryAPI
+from fastapi.responses import JSONResponse
+from routers.database import getDBClient
+from routers.utils import cache_headers, queryAPI
 from typing import List, Optional
 
+dbClient = getDBClient()
 MRT_router = APIRouter()
 
 @MRT_router.get("/mrt_crowd_density")
@@ -57,3 +61,16 @@ async def get_mrt_crowd_density(mrt_lines: List[str] = Query(..., description="L
     except Exception as e:
         print(f"Unexpected error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+@MRT_router.get("/getMRTStationCoords")
+async def get_stationCoord_data():
+    key = "stationCoords"
+    try:
+        response = dbClient.table("jsons").select("json_value").eq("id", key).execute()
+        if response.data:
+            return response.data[0]["json_value"]
+        else:
+            return {"message": "No records available"}
+    except Exception as e:
+        print(f"Error fetching mrt Station Coordinates data: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching mrt Station Coordinates data")
