@@ -5,7 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import JSONResponse
 import pytz
 from routers.database import createRequest, getDBClient,updateUserDetails
-from routers.utils import cache_headers, process_bus_service, queryAPI, natural_sort_key
+from routers.utils import cache_headers, process_bus_service, queryAPI, natural_sort_key, service_sort_key
 import asyncio
 from typing import Optional
 import logging
@@ -225,7 +225,7 @@ async def get_bus_timing(
         # Filter None and sort
         valid = sorted(
             (r for r in results if r),
-            key=lambda x: natural_sort_key(x["serviceNo"])
+            key=lambda x: service_sort_key(x["serviceNo"])
         )
 
         # Background tasks for non-critical I/O

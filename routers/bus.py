@@ -95,16 +95,16 @@ async def extract_bus_stops():
 
     try:
         # Check if data exists in bus_routes table
-        bus_routes_check = dbClient.table("bus_route").select("service_no", count="exact").limit(1).execute()
-        bus_routes_exists = bus_routes_check.count > 0
+        # bus_routes_check = dbClient.table("bus_route").select("service_no", count="exact").limit(1).execute()
+        # bus_routes_exists = bus_routes_check.count > 0
 
-        # Check if data exists in jsons table for bus_stop_available_services_key
-        jsons_check = dbClient.table("jsons").select("id").eq("id", bus_stop_available_services_key).execute()
-        jsons_exists = len(jsons_check.data) > 0
+        # # Check if data exists in jsons table for bus_stop_available_services_key
+        # jsons_check = dbClient.table("jsons").select("id").eq("id", bus_stop_available_services_key).execute()
+        # jsons_exists = len(jsons_check.data) > 0
 
-        # If both datasets exist, return message
-        if bus_routes_exists and jsons_exists:
-            return {"message": "Already Extracted"}
+        # # If both datasets exist, return message
+        # if bus_routes_exists and jsons_exists:
+        #     return {"message": "Already Extracted"}
 
         # If either dataset is missing, extract and upsert
         raw_bus_route_data = await getBusRoutesFromLTA()
@@ -132,17 +132,17 @@ async def extract_bus_stops():
         batch_size = 1000
         for i in range(0, len(formatted_bus_routes), batch_size):
             batch = formatted_bus_routes[i:i + batch_size]
-            response = dbClient.table("bus_route").upsert(
-                batch,
-                on_conflict="service_no"
-            ).execute()
+            # response = dbClient.table("bus_route").upsert(
+            #     batch,
+            #     on_conflict="service_no"
+            # ).execute()
 
             # Debug: Print batch progress
             print(f"Upserted bus routes batch {i // batch_size + 1}: {len(batch)} records")
 
             # Check if the operation was successful
-            if not response.data:
-                raise HTTPException(status_code=500, detail="Failed to upsert bus routes data")
+            # if not response.data:
+            #     raise HTTPException(status_code=500, detail="Failed to upsert bus routes data")
 
         # Prepare bus stop available services data for upsert
         formatted_bus_stop_services = {

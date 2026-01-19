@@ -181,7 +181,7 @@ def getFormattedBusRoutesData(busRoutes: dict):
 
         # Sort bus stop lists in bus_stop_master_list
         for bus_stop in bus_stop_master_list:
-            bus_stop_master_list[bus_stop].sort()
+            bus_stop_master_list[bus_stop].sort(key=service_sort_key)
 
         # Sort and format bus stops in service_dict
         for service_no in service_dict:
@@ -193,6 +193,18 @@ def getFormattedBusRoutesData(busRoutes: dict):
     
     return bus_route_dict, dict(bus_stop_master_list)
         
+def service_sort_key(service_no: str):
+    if not service_no:
+        return (float("inf"), "")
+
+    match = re.match(r"(\d+)([A-Za-z]*)", service_no)
+    if match:
+        number = int(match.group(1))
+        suffix = match.group(2)
+        return (number, suffix)
+
+    # Fallback: non-numeric service numbers go last
+    return (float("inf"), service_no)
 
 def natural_sort_key(service_no):
     match = re.match(r"(\d+)([A-Z]*)", service_no) 
