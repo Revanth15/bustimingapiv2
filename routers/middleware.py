@@ -7,8 +7,12 @@ import httpx
 LOG_ENDPOINT = "https://bussinganalytics.vercel.app/api/log"
 
 class FirebaseLoggerMiddleware:
-    def __init__(self, app: FastAPI):
+    def __init__(self, app: FastAPI, exclude_prefixes: list[str] | None = None):
         self.app = app
+        self.exclude_prefixes = tuple(exclude_prefixes or [])
+
+    def _should_log(self, path: str) -> bool:
+        return not path.startswith(self.exclude_prefixes)
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -18,7 +22,10 @@ class FirebaseLoggerMiddleware:
         request = Request(scope, receive=receive)
 
         async def send_wrapper(message):
-            if message["type"] == "http.response.start":
+            if (
+                message["type"] == "http.response.start"
+                and self._should_log(request.url.path)
+            ):
                 log_data = {
                     "id": str(uuid.uuid4()),
                     "timestamp": datetime.datetime.utcnow().isoformat(),
@@ -29,16 +36,12 @@ class FirebaseLoggerMiddleware:
                     "user_agent": request.headers.get("user-agent"),
                     "params": dict(request.query_params),
                 }
-                # Fire-and-forget logging
-                threading.Thread(target=self._send_log, args=(log_data,), daemon=True).start()
+                threading.Thread(
+                    target=self._send_log,
+                    args=(log_data,),
+                    daemon=True
+                ).start()
 
             await send(message)
 
         await self.app(scope, receive, send_wrapper)
-
-    def _send_log(self, log_data: dict):
-        try:
-            httpx.post(LOG_ENDPOINT, json=log_data, timeout=0.5)
-        except Exception:
-            # Fail silently
-            pass

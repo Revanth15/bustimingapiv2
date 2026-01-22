@@ -20,7 +20,13 @@ app.include_router(bus_router)
 app.include_router(traffic_image_router)
 app.include_router(MRT_router)
 app.include_router(device_token_router)
-app.add_middleware(FirebaseLoggerMiddleware)
+# app.add_middleware(FirebaseLoggerMiddleware, exclude_paths=['/bustiming'])
+app.add_middleware(
+    FirebaseLoggerMiddleware,
+    exclude_prefixes=[
+        "/bustiming"
+    ]
+)
 
 @app.get("/")
 async def root():
