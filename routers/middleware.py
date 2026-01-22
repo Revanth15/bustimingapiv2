@@ -45,3 +45,10 @@ class FirebaseLoggerMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_wrapper)
+
+    def _send_log(self, log_data: dict):
+        try:
+            httpx.post(LOG_ENDPOINT, json=log_data, timeout=0.5)
+        except Exception:
+            # Fail silently
+            pass
