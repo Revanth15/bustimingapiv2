@@ -1,13 +1,17 @@
 import uuid
 import datetime
 import time
-import asyncio
-from fastapi import Request
+import threading
+from fastapi import FastAPI, Request
 import httpx
 from routers.utils import getEnvVariable
 
+AXIOM_TOKEN = getEnvVariable("AXIOM_TOKEN")
+AXIOM_DATASET = getEnvVariable("AXIOM_DATASET")
+AXIOM_INGEST_URL = f"https://api.axiom.co/v1/datasets/{AXIOM_DATASET}/ingest"
+
 class AxiomLoggerMiddleware:
-    def __init__(self, app, exclude_prefixes=None):
+    def __init__(self, app: FastAPI, exclude_prefixes: list[str] | None = None):
         self.app = app
         self.exclude_prefixes = tuple(exclude_prefixes or [])
     
@@ -25,7 +29,7 @@ class AxiomLoggerMiddleware:
         async def send_wrapper(message):
             if (
                 message["type"] == "http.response.start"
-                # and self._should_log(request.url.path)
+                and self._should_log(request.url.path)
             ):
                 duration_ms = (time.perf_counter() - start) * 1000
                 log_data = {
@@ -39,31 +43,27 @@ class AxiomLoggerMiddleware:
                     "user_agent": request.headers.get("user-agent"),
                     "params": dict(request.query_params),
                 }
-                # Fire and forget
-                asyncio.create_task(send_log(log_data))
+                threading.Thread(
+                    target=self._send_log,
+                    args=(log_data,),
+                    daemon=True
+                ).start()
             
             await send(message)
         
         await self.app(scope, receive, send_wrapper)
-
-AXIOM_TOKEN = getEnvVariable("AXIOM_TOKEN")
-AXIOM_DATASET = getEnvVariable("AXIOM_DATASET")
-AXIOM_INGEST_URL = f"https://api.axiom.co/v1/datasets/{AXIOM_DATASET}/ingest"
-
-async def send_log(log: dict):
-    try:
-        payload = {
-            **log,
-            "_time": time.time(),
-        }
-        async with httpx.AsyncClient(timeout=0.5) as client:
-            await client.post(
+    
+    def _send_log(self, log_data: dict):
+        try:
+            httpx.post(
                 AXIOM_INGEST_URL,
-                json=[payload],
+                json=[log_data],
                 headers={
                     "Authorization": f"Bearer {AXIOM_TOKEN}",
                     "Content-Type": "application/json",
                 },
+                timeout=0.5
             )
-    except Exception:
-        pass  # Fail silently
+        except Exception:
+            # Fail silently
+            pass
