@@ -1,5 +1,6 @@
 import asyncio
 from fastapi import FastAPI
+from routers.axiomMiddleware import AxiomLoggerMiddleware
 from routers.database import db_router as db_router 
 from routers.busstop import busStops_router as busStops_router 
 from routers.middleware import FirebaseLoggerMiddleware
@@ -27,6 +28,11 @@ app.add_middleware(
         "/bustiming"
     ]
 )
+
+app.add_middleware(
+    AxiomLoggerMiddleware
+)
+
 
 @app.get("/")
 async def root():
