@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import gzip
 import json
 # import geopandas as gpd
 import os
@@ -186,6 +187,34 @@ async def getVMSFromLTA():
         counter += 500
     flattened_list = flatten([res["value"] for res in results if isinstance(res, dict) and res.get("value")])
     return flattened_list
+
+def compress_to_gzip(data) -> bytes:
+    """
+    Compresses data into Gzip format. 
+    Accepts: dict, list, str, or bytes.
+    """
+    try:
+        # 1. Convert to bytes based on input type
+        if isinstance(data, (dict, list)):
+            # It's a Python object, dump to JSON string then encode
+            bytes_data = json.dumps(data).encode("utf-8")
+        elif isinstance(data, str):
+            # It's already a string, just encode
+            bytes_data = data.encode("utf-8")
+        elif isinstance(data, bytes):
+            # It's already bytes, ready to go
+            bytes_data = data
+        else:
+            # Fallback for other types (int, float, etc.)
+            bytes_data = str(data).encode("utf-8")
+
+        # 2. Compress the bytes
+        return gzip.compress(bytes_data)
+        
+    except Exception as e:
+        print(f"Compression failed: {e}")
+        # Return empty bytes or re-raise depending on your error policy
+        raise e
 
 # def getBusStopAvailableServicesList(busRoutes: dict):
 #     bus_stop_master_list = defaultdict(list)  # BusStopCode -> List of ServiceNos

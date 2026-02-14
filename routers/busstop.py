@@ -1,11 +1,12 @@
 from datetime import datetime, timedelta, timezone
+import gzip
 import json
 import sys
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 import pytz
 from routers.database import createRequest, getDBClient,updateUserDetails
-from routers.utils import cache_headers, process_bus_service, queryAPI, natural_sort_key, service_sort_key
+from routers.utils import cache_headers, compress_to_gzip, process_bus_service, queryAPI, natural_sort_key, service_sort_key
 import asyncio
 from typing import Optional
 import logging
@@ -188,6 +189,19 @@ async def get_all_bus_stops():
             })
 
         # return {"busStops": bus_stop_data}
+        # full_structure = {"busStops": bus_stop_data}
+        # json_string = json.dumps(full_structure, separators=(',', ':'))
+        # json_bytes = json_string.encode("utf-8")
+        # compressed_data = gzip.compress(json_bytes)
+
+        # return Response(
+        #     content=compressed_data,
+        #     media_type="application/json",
+        #     headers={
+        #         **cache_headers(),
+        #         "Content-Encoding": "gzip"
+        #     }
+        # )
         return JSONResponse(content={"busStops": bus_stop_data}, headers=cache_headers())
     
     except Exception as e:

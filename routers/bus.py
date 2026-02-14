@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import pytz
 from routers.database import getDBClient
-from routers.utils import cache_headers, getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, queryAPI, restructure_to_stops_only
+from routers.utils import cache_headers, compress_to_gzip, getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, queryAPI, restructure_to_stops_only
 import gzip
 
 dbClient = getDBClient()
@@ -75,7 +75,18 @@ async def get_bus_routes_by_stops():
             row["bus_stop_code"]: json.loads(row["json_value"]) 
             for row in response.data
         }
-        return JSONResponse(content=combined_data, headers=cache_headers())
+
+        compressed_data = compress_to_gzip(combined_data)
+
+        return Response(
+            content=compressed_data,
+            media_type="application/json",
+            headers={
+                **cache_headers(),
+                "Content-Encoding": "gzip",
+                "X-Original-Size": str(len(json.dumps(combined_data))) # Optional: for debugging
+            }
+        )
 
     except Exception as e:
         print(f"Error fetching bus route data: {e}")
