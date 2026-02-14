@@ -2,12 +2,13 @@ from datetime import datetime
 import json
 from typing import List, Optional
 import uuid
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import pytz
 from routers.database import getDBClient
 from routers.utils import cache_headers, getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, queryAPI, restructure_to_stops_only
+import gzip
 
 dbClient = getDBClient()
 
@@ -184,8 +185,19 @@ async def get_bus_route_data():
             json_value = row["json_value"]
             data = json.loads(json_value) if isinstance(json_value, str) else json_value
             combined_data.append(data)
+        
 
-        return JSONResponse(content=combined_data, headers=cache_headers())
+        json_data = json.dumps(combined_data).encode("utf-8")
+        compressed_data = gzip.compress(json_data)
+
+        return Response(
+            content=compressed_data,
+            media_type="application/json",
+            headers={
+                **cache_headers(),
+                "Content-Encoding": "gzip"
+            }
+        )
     except Exception as e:
         print(f"Error fetching bus route data: {e}")
         raise HTTPException(status_code=500, detail="Error fetching bus route data")
