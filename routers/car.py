@@ -1,12 +1,13 @@
+from collections import defaultdict
 from fastapi import APIRouter, HTTPException, Query
 from routers.database import getDBClient
-from routers.utils import queryAPI
+from routers.utils import getCarParkAvailabilityFromLTA, getTrafficIncidentsFromLTA, getVMSFromLTA, queryAPI
 import re
 from datetime import datetime
 
 dbClient = getDBClient()
 
-traffic_image_router = APIRouter()
+car_related_router = APIRouter()
 
 camera_id_descriptions = {
     "1111": "TPE(PIE) - Exit 2 to Loyang Ave",
@@ -100,7 +101,7 @@ camera_id_descriptions = {
     "9706": "SLE(Woodlands) - Mandai Lake Flyover",
 }
 
-@traffic_image_router.get("/traffic_images")
+@car_related_router.get("/traffic_images")
 async def get_traffic_images():
     try:
         ltaResponse = await queryAPI("ltaodataservice/Traffic-Imagesv2", {})
@@ -143,3 +144,100 @@ async def get_traffic_images():
         print(f"Unexpected error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
     
+
+@car_related_router.get("/car_park_availability")
+async def get_parking_availability():
+    try:
+        car_parks = await getCarParkAvailabilityFromLTA()
+        if not car_parks:
+            return []
+
+        # Group car parks by CarParkID
+        groups = defaultdict(list)
+        for cp in car_parks:
+            groups[cp["CarParkID"]].append(cp)
+
+        processed_car_parks = []
+        for car_park_id, cps in groups.items():
+            # Assume common fields are the same for the same ID; take from first
+            first = cps[0]
+            area = first.get("Area", "")
+            development = first.get("Development", "")
+            location_str = first.get("Location", "")
+            agency = first.get("Agency", "")
+
+            # Split location into lat and lng
+            location_parts = location_str.split()
+            if len(location_parts) != 2:
+                # Handle invalid location; skip or set defaults
+                continue
+            try:
+                latitude = float(location_parts[0])
+                longitude = float(location_parts[1])
+            except ValueError:
+                # Handle conversion error; skip or set defaults
+                continue
+
+            # Initialize available lots
+            available_lots = {
+                "car": 0,
+                "motorcycle": 0,
+                "heavyVehicle": 0
+            }
+
+            # Populate based on LotType (assuming one per type; override if multiple)
+            for cp in cps:
+                lot_type = cp.get("LotType", "")
+                available = cp.get("AvailableLots", 0)
+                if lot_type == "C":
+                    available_lots["car"] = available
+                elif lot_type == "Y":
+                    available_lots["motorcycle"] = available
+                elif lot_type == "H":
+                    available_lots["heavyVehicle"] = available
+                # Add more mappings if needed for other types
+
+            # Build the processed object with camelCase keys
+            processed_car_parks.append({
+                "carParkID": car_park_id,
+                "area": area,
+                "development": development,
+                "latitude": latitude,
+                "longitude": longitude,
+                "agency": agency,
+                "availableLots": available_lots
+            })
+
+        return processed_car_parks
+
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    
+@car_related_router.get("/traffic_incidents")
+async def traffic_incidents():
+    try:
+        traffic_incidents = await getTrafficIncidentsFromLTA()
+        vms = await getVMSFromLTA()
+
+        all_incidents = traffic_incidents + vms
+
+        processed_incidents = []
+        for inc in all_incidents:
+            inc_type = inc.get("Type", "VMS")
+            processed_incidents.append({
+                "type": inc_type,
+                "latitude": inc.get("Latitude", 0.0),
+                "longitude": inc.get("Longitude", 0.0),
+                "message": inc.get("Message", "")
+            })
+
+        return processed_incidents
+
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")

@@ -136,6 +136,57 @@ async def getBusServicesFromLTA():
 
     return flattened_list
 
+async def getCarParkAvailabilityFromLTA():
+    results = []
+    counter = 0
+    flatten = lambda l: [y for x in l for y in x]
+    print("Starting to fetch car park availability data...")
+
+    while True:
+        print(f"Counter value: {counter}")
+        result = await queryAPI("ltaodataservice/CarParkAvailabilityv2", {"$skip": str(counter)})
+        results.append(result)
+        counter += 500
+        if counter >= 4000:
+            break
+
+    flattened_list = flatten([res["value"] for res in results if res.get("value")])
+
+    return flattened_list
+
+async def getTrafficIncidentsFromLTA():
+    results = []
+    counter = 0
+    flatten = lambda l: [y for x in l for y in x]
+    print("Starting to fetch traffic incidents data...")
+
+    while True:
+        print(f"Counter value: {counter}")
+        result = await queryAPI("ltaodataservice/TrafficIncidents", {"$skip": str(counter)})
+        results.append(result)
+        counter += 500
+        if counter >= 1000:
+            break
+
+    flattened_list = flatten([res["value"] for res in results if res.get("value")])
+
+    return flattened_list
+
+async def getVMSFromLTA():
+    results = []
+    counter = 0
+    flatten = lambda l: [y for x in l for y in x]
+    print("Starting to fetch VMS data...")
+    while True:
+        print(f"Counter value: {counter}")
+        result = await queryAPI("ltaodataservice/VMS", {"$skip": str(counter)})
+        if not result.get("value"):  
+            break
+        results.append(result)
+        counter += 500
+    flattened_list = flatten([res["value"] for res in results if isinstance(res, dict) and res.get("value")])
+    return flattened_list
+
 # def getBusStopAvailableServicesList(busRoutes: dict):
 #     bus_stop_master_list = defaultdict(list)  # BusStopCode -> List of ServiceNos
     

@@ -6,7 +6,7 @@ from routers.busstop import busStops_router as busStops_router
 from routers.middleware import FirebaseLoggerMiddleware
 from routers.users import users_router as users_router 
 from routers.bus import bus_router as bus_router
-from routers.traffic_image import traffic_image_router as traffic_image_router
+from routers.car import car_related_router as car_related_router
 from routers.mrt import MRT_router as MRT_router
 from routers.device_token import device_token_router as device_token_router
 import uvicorn
@@ -18,7 +18,7 @@ app.include_router(db_router)
 app.include_router(busStops_router)
 app.include_router(users_router)
 app.include_router(bus_router)
-app.include_router(traffic_image_router)
+app.include_router(car_related_router)
 app.include_router(MRT_router)
 app.include_router(device_token_router)
 # app.add_middleware(FirebaseLoggerMiddleware, exclude_paths=['/bustiming'])
