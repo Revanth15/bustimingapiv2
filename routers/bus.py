@@ -84,7 +84,7 @@ async def get_bus_routes_by_stops():
             headers={
                 **cache_headers(),
                 "Content-Encoding": "gzip",
-                "X-Original-Size": str(len(json.dumps(combined_data))) # Optional: for debugging
+                "X-Original-Size": str(len(json.dumps(combined_data))) 
             }
         )
 

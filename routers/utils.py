@@ -155,6 +155,35 @@ async def getCarParkAvailabilityFromLTA():
 
     return flattened_list
 
+async def getAllEVChargingPointsFromLTA():
+    """
+    Fetches ALL EV charging points data from LTA API in a single batch file.
+    Uses httpx (modern async HTTP library).
+    
+    Returns:
+        list: List of all EV charging points in Singapore
+    """
+    # Step 1: Get the batch file link from the API
+    batch_response = await queryAPI("ltaodataservice/EVCBatch", {})
+    
+    # Step 2: Extract the download link from the response
+    if batch_response and "value" in batch_response and len(batch_response["value"]) > 0:
+        download_link = batch_response["value"][0]["Link"]
+        
+        # Step 3: Download the actual data from the link using httpx
+        async with httpx.AsyncClient() as client:
+            response = await client.get(download_link)
+            
+            if response.status_code == 200:
+                ev_data = response.json()
+                return ev_data
+            else:
+                print(f"Error downloading batch file: {response.status_code}")
+                return None
+    else:
+        print("No batch file link found in response")
+        return None
+
 async def getTrafficIncidentsFromLTA():
     results = []
     counter = 0

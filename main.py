@@ -25,12 +25,18 @@ app.include_router(device_token_router)
 app.add_middleware(
     FirebaseLoggerMiddleware,
     exclude_prefixes=[
-        "/bustiming"
+        "/bustiming",
+        "/health",
+        "/favicon.ico"
     ]
 )
 
 app.add_middleware(
-    AxiomLoggerMiddleware
+    AxiomLoggerMiddleware,
+    exclude_prefixes=[
+        "/favicon.ico",
+        "/health"
+    ]
 )
 
 
