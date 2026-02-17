@@ -4,6 +4,7 @@ from typing import List, Optional
 import uuid
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
+import httpx
 from pydantic import BaseModel
 import pytz
 from routers.database import getDBClient
@@ -13,6 +14,15 @@ import gzip
 dbClient = getDBClient()
 
 bus_router = APIRouter()
+
+class DeleteRequest(BaseModel):
+    serviceNumbers: list[str]
+
+    
+GEOJSON_URL = "https://data.busrouter.sg/v1/routes.min.geojson"
+
+class PolylineRequest(BaseModel):
+    serviceNumbers: list[str]
 
 @bus_router.api_route("/health", methods=["GET", "HEAD"])
 async def health_check(request: Request):
@@ -176,7 +186,7 @@ async def extract_bus_stops():
         if not response.data:
             raise HTTPException(status_code=500, detail="Failed to upsert bus stop available services data")
 
-        return {"message": "Extracted and stored successfully"}
+        return {"message": formatted_bus_route_data}
 
     except Exception as e:
         print(f"Error processing bus routes data: {e}")
@@ -341,3 +351,70 @@ async def bulk_update_bus_routes(data: BusRouteBulkUpdate):
     except Exception as e:
         print(f"Error processing bulk update: {e}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@bus_router.post("/bus-routes/polylines")
+async def get_bus_routes_with_polylines(request: PolylineRequest):
+    # 1. Fetch GeoJSON and build O(1) lookup: {"serviceNo|direction": [[lat, lng], ...]}
+    async with httpx.AsyncClient() as client:
+        geojson_res = await client.get(GEOJSON_URL)
+        if geojson_res.status_code != 200:
+            raise HTTPException(status_code=502, detail="Failed to fetch GeoJSON source")
+        geojson = geojson_res.json()
+
+    lookup: dict[str, list[list[float]]] = {}
+    for feature in geojson.get("features", []):
+        props = feature.get("properties", {})
+        service_no = str(props.get("number", ""))
+        pattern = props.get("pattern")
+        direction = {0: "1", 1: "2"}.get(pattern)
+        if direction is None:
+            continue
+        coords = feature.get("geometry", {}).get("coordinates", [])
+        if not coords:
+            continue
+        # Swap [lng, lat] → [lat, lng]
+        transformed = [[lat, lng] for lng, lat in coords]
+        key = f"{service_no}|{direction}"
+        if key in lookup:
+            lookup[key].extend(transformed)  # concatenate multiple features
+        else:
+            lookup[key] = transformed
+
+    # 2. Fetch and format LTA data
+    raw_bus_route_data = await getBusRoutesFromLTA()
+    formatted_bus_route_data, _ = getFormattedBusRoutesData(raw_bus_route_data)
+
+    # 3. Filter to requested services and inject polylines
+    requested = set(request.serviceNumbers)
+    result = []
+    for svc in formatted_bus_route_data:
+        if svc["serviceNo"] not in requested:
+            continue
+        routes = []
+        for route in svc["routes"]:
+            key = f"{svc['serviceNo']}|{route['direction']}"
+            coords = lookup.get(key)
+            polyline = json.dumps(coords, separators=(",", ":")) if coords else ""
+            routes.append({**route, "polyline": polyline})
+        result.append({**svc, "routes": routes})
+
+    return {"bus_routes" : result}
+
+@bus_router.delete("bus-routes")
+async def delete_bus_routes(request: DeleteRequest):
+    if not request.serviceNumbers:
+        raise HTTPException(status_code=400, detail="`serviceNumbers` must be a non-empty list.")
+
+    response = (
+        dbClient.table("bus_route")
+        .delete()
+        .in_("service_no", request.serviceNumbers)
+        .execute()
+    )
+
+    deleted = response.data or []
+
+    return {
+        "deleted": len(deleted),
+        "serviceNumbers": [row["service_no"] for row in deleted],
+    }
