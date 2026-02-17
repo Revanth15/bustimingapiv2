@@ -1,12 +1,11 @@
 from datetime import datetime, timedelta, timezone
-import gzip
 import json
 import sys
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import JSONResponse
 import pytz
-from routers.database import createRequest, getDBClient,updateUserDetails
-from routers.utils import cache_headers, compress_to_gzip, process_bus_service, queryAPI, natural_sort_key, service_sort_key
+from routers.database import getDBClient
+from routers.utils import cache_headers, process_bus_service, queryAPI, service_sort_key
 import asyncio
 from typing import Optional
 import logging

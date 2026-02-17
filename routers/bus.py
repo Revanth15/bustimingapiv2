@@ -2,13 +2,13 @@ from datetime import datetime
 import json
 from typing import List, Optional
 import uuid
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 import httpx
 from pydantic import BaseModel
 import pytz
 from routers.database import getDBClient
-from routers.utils import cache_headers, compress_to_gzip, getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, queryAPI, restructure_to_stops_only
+from routers.utils import cache_headers, compress_to_gzip, getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, restructure_to_stops_only
 import gzip
 
 dbClient = getDBClient()

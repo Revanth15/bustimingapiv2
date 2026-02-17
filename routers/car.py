@@ -1,5 +1,5 @@
 from collections import defaultdict
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Response
 from routers.database import getDBClient
 from routers.utils import compress_to_gzip, getAllEVChargingPointsFromLTA, getCarParkAvailabilityFromLTA, getTrafficIncidentsFromLTA, getVMSFromLTA, queryAPI
 import re

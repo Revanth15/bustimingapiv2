@@ -1,8 +1,5 @@
-from datetime import datetime, timedelta, timezone
-import json
 import time
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import JSONResponse
 from routers.database import getDBClient
 from routers.utils import cache_headers, queryAPI
 from typing import List, Optional

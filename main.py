@@ -1,4 +1,3 @@
-import asyncio
 from fastapi import FastAPI
 from routers.axiomMiddleware import AxiomLoggerMiddleware
 from routers.client import lifespan
