@@ -3,3 +3,12 @@ fly.toml
 __pycache__/
 .envrc
 .venv/
+*.json
+*.geoJson
+TrainStationExit_Feb2025/
+TrainStation_Aug2025/
+stations.csv
+test.js
+test.py
+test1.py
+.env

@@ -10,6 +10,7 @@ import pytz
 from routers.database import getDBClient
 from routers.utils import cache_headers, compress_to_gzip, getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, restructure_to_stops_only
 import gzip
+from routers.cache import TWO_DAYS, cache
 
 dbClient = getDBClient()
 
@@ -76,6 +77,11 @@ async def get_bus_routes_by_stops():
     Get bus routes data organized by bus stops only.
     """
     try:
+        # cached = cache.get("bus_routes_stops")
+        # if cached:
+        #     return Response(content=cached, media_type="application/json",
+        #                 headers={**cache_headers(), "Content-Encoding": "gzip", "X-Cache": "HIT"})
+
         response = dbClient.table("bus_route_raw").select("bus_stop_code, json_value").execute()
 
         if not response.data:
@@ -87,6 +93,7 @@ async def get_bus_routes_by_stops():
         }
 
         compressed_data = compress_to_gzip(combined_data)
+        # cache.set("bus_routes_stops", compressed_data, ttl=TWO_DAYS)
 
         return Response(
             content=compressed_data,
@@ -196,6 +203,11 @@ async def extract_bus_stops():
 async def get_bus_route_data():
     key = "busRoute"
     try:
+        cached = cache.get("bus_routes")
+        if cached:
+            return Response(content=cached, media_type="application/json",
+                        headers={**cache_headers(), "Content-Encoding": "gzip", "X-Cache": "HIT"})
+        
         response = dbClient.table("bus_route").select("service_no, json_value").execute()
 
         if not response.data:
@@ -210,6 +222,8 @@ async def get_bus_route_data():
 
         json_data = json.dumps(combined_data).encode("utf-8")
         compressed_data = gzip.compress(json_data)
+
+        cache.set("bus_routes", compressed_data, ttl=TWO_DAYS)
 
         return Response(
             content=compressed_data,
@@ -418,3 +432,11 @@ async def delete_bus_routes(request: DeleteRequest):
         "deleted": len(deleted),
         "serviceNumbers": [row["service_no"] for row in deleted],
     }
+
+@bus_router.post("/cache/purge")
+async def purge_cache(key: str = None):
+    if key:
+        cache.delete(key)
+        return {"message": f"Cache key '{key}' purged"}
+    cache.clear()
+    return {"message": "All cache purged"}
