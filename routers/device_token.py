@@ -15,6 +15,7 @@ class DeviceToken(BaseModel):
     device_model: str
     system_version: str
     app_version: str
+    push_to_start_token: str | None = None
 
 @device_token_router.post("/registerDeviceToken")
 async def register_device_token(device: DeviceToken):
@@ -36,6 +37,9 @@ async def register_device_token(device: DeviceToken):
             "app_version": device.app_version,
             "registered_date": current_timestamp
         }
+
+        if device.push_to_start_token:
+            device_data["push_to_start_token"] = device.push_to_start_token
 
         # Upsert into devices table
         response = supabase.table("devices").upsert(
