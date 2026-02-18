@@ -9,6 +9,7 @@ from routers.bus import bus_router as bus_router
 from routers.car import car_related_router as car_related_router
 from routers.mrt import MRT_router as MRT_router
 from routers.device_token import device_token_router as device_token_router
+from routers.feedback import feedback_router as feedback_router
 import uvicorn
 import os
 
@@ -21,6 +22,7 @@ app.include_router(bus_router)
 app.include_router(car_related_router)
 app.include_router(MRT_router)
 app.include_router(device_token_router)
+app.include_router(feedback_router)
 # app.add_middleware(FirebaseLoggerMiddleware, exclude_paths=['/bustiming'])
 app.add_middleware(
     FirebaseLoggerMiddleware,
