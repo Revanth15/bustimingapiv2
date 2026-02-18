@@ -1,7 +1,7 @@
 from collections import defaultdict
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Response
 from routers.database import getDBClient
-from routers.utils import getCarParkAvailabilityFromLTA, getTrafficIncidentsFromLTA, getVMSFromLTA, queryAPI
+from routers.utils import compress_to_gzip, getAllEVChargingPointsFromLTA, getCarParkAvailabilityFromLTA, getTrafficIncidentsFromLTA, getVMSFromLTA, queryAPI
 import re
 from datetime import datetime
 
@@ -208,7 +208,15 @@ async def get_parking_availability():
                 "availableLots": available_lots
             })
 
-        return processed_car_parks
+        compressed_data = compress_to_gzip(processed_car_parks)
+
+        return Response(
+            content=compressed_data,
+            media_type="application/json",
+            headers={
+                "Content-Encoding": "gzip",
+            }
+        )
 
     except HTTPException as he:
         raise he
@@ -235,6 +243,27 @@ async def traffic_incidents():
             })
 
         return processed_incidents
+
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    
+@car_related_router.get("/ev_charging")
+async def ev_charging():
+    try:
+        ev_charging = await getAllEVChargingPointsFromLTA()
+
+        compressed_data = compress_to_gzip(ev_charging["evLocationsData"])
+
+        return Response(
+            content=compressed_data,
+            media_type="application/json",
+            headers={
+                "Content-Encoding": "gzip",
+            }
+        )
 
     except HTTPException as he:
         raise he

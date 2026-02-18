@@ -1,11 +1,7 @@
-from datetime import datetime, timezone
-import os
-from fastapi import APIRouter, HTTPException, Query
-from pocketbase import PocketBase
+from fastapi import APIRouter
 from dotenv import load_dotenv
-from routers.schemas import BusTimingRequest, User
-from routers.utils import queryAPI, getEnvVariable, timeDifferenceToNowSg
-from supabase import create_client, Client
+from routers.utils import getEnvVariable
+from supabase import create_client
 
 load_dotenv()
 

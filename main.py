@@ -1,6 +1,6 @@
-import asyncio
 from fastapi import FastAPI
 from routers.axiomMiddleware import AxiomLoggerMiddleware
+from routers.client import lifespan
 from routers.database import db_router as db_router 
 from routers.busstop import busStops_router as busStops_router 
 from routers.middleware import FirebaseLoggerMiddleware
@@ -12,7 +12,7 @@ from routers.device_token import device_token_router as device_token_router
 import uvicorn
 import os
 
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 app.include_router(db_router)
 app.include_router(busStops_router)
@@ -25,12 +25,18 @@ app.include_router(device_token_router)
 app.add_middleware(
     FirebaseLoggerMiddleware,
     exclude_prefixes=[
-        "/bustiming"
+        "/bustiming",
+        "/health",
+        "/favicon.ico"
     ]
 )
 
 app.add_middleware(
-    AxiomLoggerMiddleware
+    AxiomLoggerMiddleware,
+    exclude_prefixes=[
+        "/favicon.ico",
+        "/health"
+    ]
 )
 
 

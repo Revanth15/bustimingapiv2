@@ -2,17 +2,28 @@ from datetime import datetime
 import json
 from typing import List, Optional
 import uuid
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+import httpx
 from pydantic import BaseModel
 import pytz
 from routers.database import getDBClient
-from routers.utils import cache_headers, compress_to_gzip, getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, queryAPI, restructure_to_stops_only
+from routers.utils import cache_headers, compress_to_gzip, getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, restructure_to_stops_only
 import gzip
+from routers.cache import TWO_DAYS, cache
 
 dbClient = getDBClient()
 
 bus_router = APIRouter()
+
+class DeleteRequest(BaseModel):
+    serviceNumbers: list[str]
+
+    
+GEOJSON_URL = "https://data.busrouter.sg/v1/routes.min.geojson"
+
+class PolylineRequest(BaseModel):
+    serviceNumbers: list[str]
 
 @bus_router.api_route("/health", methods=["GET", "HEAD"])
 async def health_check(request: Request):
@@ -66,6 +77,11 @@ async def get_bus_routes_by_stops():
     Get bus routes data organized by bus stops only.
     """
     try:
+        # cached = cache.get("bus_routes_stops")
+        # if cached:
+        #     return Response(content=cached, media_type="application/json",
+        #                 headers={**cache_headers(), "Content-Encoding": "gzip", "X-Cache": "HIT"})
+
         response = dbClient.table("bus_route_raw").select("bus_stop_code, json_value").execute()
 
         if not response.data:
@@ -77,6 +93,7 @@ async def get_bus_routes_by_stops():
         }
 
         compressed_data = compress_to_gzip(combined_data)
+        # cache.set("bus_routes_stops", compressed_data, ttl=TWO_DAYS)
 
         return Response(
             content=compressed_data,
@@ -84,7 +101,7 @@ async def get_bus_routes_by_stops():
             headers={
                 **cache_headers(),
                 "Content-Encoding": "gzip",
-                "X-Original-Size": str(len(json.dumps(combined_data))) # Optional: for debugging
+                "X-Original-Size": str(len(json.dumps(combined_data))) 
             }
         )
 
@@ -176,7 +193,7 @@ async def extract_bus_stops():
         if not response.data:
             raise HTTPException(status_code=500, detail="Failed to upsert bus stop available services data")
 
-        return {"message": "Extracted and stored successfully"}
+        return {"message": formatted_bus_route_data}
 
     except Exception as e:
         print(f"Error processing bus routes data: {e}")
@@ -186,6 +203,11 @@ async def extract_bus_stops():
 async def get_bus_route_data():
     key = "busRoute"
     try:
+        cached = cache.get("bus_routes")
+        if cached:
+            return Response(content=cached, media_type="application/json",
+                        headers={**cache_headers(), "Content-Encoding": "gzip", "X-Cache": "HIT"})
+        
         response = dbClient.table("bus_route").select("service_no, json_value").execute()
 
         if not response.data:
@@ -200,6 +222,8 @@ async def get_bus_route_data():
 
         json_data = json.dumps(combined_data).encode("utf-8")
         compressed_data = gzip.compress(json_data)
+
+        cache.set("bus_routes", compressed_data, ttl=TWO_DAYS)
 
         return Response(
             content=compressed_data,
@@ -341,3 +365,78 @@ async def bulk_update_bus_routes(data: BusRouteBulkUpdate):
     except Exception as e:
         print(f"Error processing bulk update: {e}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@bus_router.post("/bus-routes/polylines")
+async def get_bus_routes_with_polylines(request: PolylineRequest):
+    # 1. Fetch GeoJSON and build O(1) lookup: {"serviceNo|direction": [[lat, lng], ...]}
+    async with httpx.AsyncClient() as client:
+        geojson_res = await client.get(GEOJSON_URL)
+        if geojson_res.status_code != 200:
+            raise HTTPException(status_code=502, detail="Failed to fetch GeoJSON source")
+        geojson = geojson_res.json()
+
+    lookup: dict[str, list[list[float]]] = {}
+    for feature in geojson.get("features", []):
+        props = feature.get("properties", {})
+        service_no = str(props.get("number", ""))
+        pattern = props.get("pattern")
+        direction = {0: "1", 1: "2"}.get(pattern)
+        if direction is None:
+            continue
+        coords = feature.get("geometry", {}).get("coordinates", [])
+        if not coords:
+            continue
+        # Swap [lng, lat] → [lat, lng]
+        transformed = [[lat, lng] for lng, lat in coords]
+        key = f"{service_no}|{direction}"
+        if key in lookup:
+            lookup[key].extend(transformed)  # concatenate multiple features
+        else:
+            lookup[key] = transformed
+
+    # 2. Fetch and format LTA data
+    raw_bus_route_data = await getBusRoutesFromLTA()
+    formatted_bus_route_data, _ = getFormattedBusRoutesData(raw_bus_route_data)
+
+    # 3. Filter to requested services and inject polylines
+    requested = set(request.serviceNumbers)
+    result = []
+    for svc in formatted_bus_route_data:
+        if svc["serviceNo"] not in requested:
+            continue
+        routes = []
+        for route in svc["routes"]:
+            key = f"{svc['serviceNo']}|{route['direction']}"
+            coords = lookup.get(key)
+            polyline = json.dumps(coords, separators=(",", ":")) if coords else ""
+            routes.append({**route, "polyline": polyline})
+        result.append({**svc, "routes": routes})
+
+    return {"bus_routes" : result}
+
+@bus_router.delete("bus-routes")
+async def delete_bus_routes(request: DeleteRequest):
+    if not request.serviceNumbers:
+        raise HTTPException(status_code=400, detail="`serviceNumbers` must be a non-empty list.")
+
+    response = (
+        dbClient.table("bus_route")
+        .delete()
+        .in_("service_no", request.serviceNumbers)
+        .execute()
+    )
+
+    deleted = response.data or []
+
+    return {
+        "deleted": len(deleted),
+        "serviceNumbers": [row["service_no"] for row in deleted],
+    }
+
+@bus_router.post("/cache/purge")
+async def purge_cache(key: str = None):
+    if key:
+        cache.delete(key)
+        return {"message": f"Cache key '{key}' purged"}
+    cache.clear()
+    return {"message": "All cache purged"}

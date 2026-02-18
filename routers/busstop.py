@@ -1,12 +1,12 @@
 from datetime import datetime, timedelta, timezone
-import gzip
 import json
 import sys
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 import pytz
-from routers.database import createRequest, getDBClient,updateUserDetails
-from routers.utils import cache_headers, compress_to_gzip, process_bus_service, queryAPI, natural_sort_key, service_sort_key
+from routers.cache import TWO_DAYS, cache
+from routers.database import getDBClient
+from routers.utils import cache_headers, process_bus_service, queryAPI, service_sort_key
 import asyncio
 from typing import Optional
 import logging
@@ -176,6 +176,13 @@ async def get_all_bus_stops():
     Retrieve all bus stop information stored in PocketBase.
     """
     try:
+        # See if cache hit is possible
+        cached = cache.get("bus_stops")
+        if cached:
+            return Response(content={"busStops": cached}, media_type="application/json",
+                        headers={**cache_headers(), "Content-Encoding": "gzip", "X-Cache": "HIT"})
+        
+
         response = dbClient.table("bus_stops").select("id, description, latitude, longitude, road_name, bus_services").execute()
         bus_stop_data = []
         for stop in response.data:
@@ -202,6 +209,7 @@ async def get_all_bus_stops():
         #         "Content-Encoding": "gzip"
         #     }
         # )
+        cache.set("bus_routes_stops", bus_stop_data, ttl=TWO_DAYS)
         return JSONResponse(content={"busStops": bus_stop_data}, headers=cache_headers())
     
     except Exception as e:

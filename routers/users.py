@@ -1,7 +1,6 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from routers.database import create_dbuser, get_dbuser, getDBClient
-from routers.schemas import BusTimingRequest, GetUser, User
-from routers.utils import queryAPI
+from routers.schemas import GetUser, User
 
 dbClient = getDBClient()
 

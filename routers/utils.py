@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 import gzip
 import json
 # import geopandas as gpd
@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 import httpx
 import re
+
+from routers.client import get_client
 
 load_dotenv()
 
@@ -34,20 +36,19 @@ def getEnvVariable(key: str, required: bool = True) -> str:
 ACCOUNT_KEY = getEnvVariable("ACCOUNT_KEY")
 
 # Query LTA's API
-async def queryAPI(path, params):
-    url = "https://datamall2.mytransport.sg/" + path
-    headers = {'AccountKey': ACCOUNT_KEY}
+async def queryAPI(path: str, params: dict) -> dict:
+    url = f"https://datamall2.mytransport.sg/{path}"
+    client = get_client()
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(url, headers=headers, params=params)
-            response.raise_for_status()
-            return response.json()
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        return response.json()
     except httpx.RequestError as exc:
-        print(f"An error occurred while requesting {exc.request.url!r}: {exc}")
-        raise HTTPException(status_code=503, detail=f"Error contacting LTA API: {exc}")
+        print(f"Request error {exc.request.url!r}: {exc}")
+        raise HTTPException(503, f"Error contacting LTA API: {exc}")
     except Exception as e:
-        print(f"An unexpected error occurred during API query: {e}")
-        raise HTTPException(status_code=500, detail="Internal error during API query")
+        print(f"Unexpected error during API query: {e}")
+        raise HTTPException(500, "Internal error during API query")
 
 def timeDifferenceToNowSg(target_time_str: str, current_time_sg: datetime) -> int:
     """Calculates the difference in minutes between target time and provided current time."""
@@ -154,6 +155,35 @@ async def getCarParkAvailabilityFromLTA():
     flattened_list = flatten([res["value"] for res in results if res.get("value")])
 
     return flattened_list
+
+async def getAllEVChargingPointsFromLTA():
+    """
+    Fetches ALL EV charging points data from LTA API in a single batch file.
+    Uses httpx (modern async HTTP library).
+    
+    Returns:
+        list: List of all EV charging points in Singapore
+    """
+    # Step 1: Get the batch file link from the API
+    batch_response = await queryAPI("ltaodataservice/EVCBatch", {})
+    
+    # Step 2: Extract the download link from the response
+    if batch_response and "value" in batch_response and len(batch_response["value"]) > 0:
+        download_link = batch_response["value"][0]["Link"]
+        
+        # Step 3: Download the actual data from the link using httpx
+        async with httpx.AsyncClient() as client:
+            response = await client.get(download_link)
+            
+            if response.status_code == 200:
+                ev_data = response.json()
+                return ev_data
+            else:
+                print(f"Error downloading batch file: {response.status_code}")
+                return None
+    else:
+        print("No batch file link found in response")
+        return None
 
 async def getTrafficIncidentsFromLTA():
     results = []
