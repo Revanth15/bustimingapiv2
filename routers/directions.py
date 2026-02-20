@@ -128,6 +128,7 @@ async def get_transit_route(body: TransitRouteRequest):
                 "start_code": leg.get("from", {}).get("stopCode"),
                 "end_name": leg.get("to", {}).get("name"),
                 "end_code": leg.get("to", {}).get("stopCode"),
+                "route_id": leg.get("routeId"),
                 "coordinates": coords,
                 "duration": leg.get("duration"),
                 "intermediate_stops": intermediate_stops
