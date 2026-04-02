@@ -18,5 +18,5 @@ primary_region = 'sin'
 
 [[vm]]
   memory = '512mb'
-  cpus = 1
+  cpus = 2
   memory_mb = 512

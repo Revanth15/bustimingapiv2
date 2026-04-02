@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import sys
 import time
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response, Request
 from fastapi.responses import JSONResponse
 import pytz
 from routers.cache import TWO_DAYS, cache
@@ -219,6 +219,7 @@ async def get_all_bus_stops():
 
 @busStops_router.get("/bustiming")
 async def get_bus_timing(
+    request: Request,
     busstopcode: str = Query(..., regex=r'^\d{5}$'),
     busservicenos: str = Query(...),
     userID: Optional[str] = None,
@@ -262,19 +263,17 @@ async def get_bus_timing(
 
         total_time = time.perf_counter() - t0
 
-        print(f"""
-        [TIMING]
-        bus_stop   : {busstopcode}
-        services   : {len(services)}
-        returned   : {len(valid)}
-
-        total      : {total_time * 1000:.2f} ms
-        api        : {(t_api_end - t_api_start) * 1000:.2f} ms
-        process    : {(t_process_end - t_process_start) * 1000:.2f} ms
-        sort       : {(t_sort_end - t_sort_start) * 1000:.2f} ms
-        """)
-
-
+        # print(f"""bus_stop: {busstopcode} || total: {total_time * 1000:.2f}ms | api: {(t_api_end - t_api_start) * 1000:.2f}ms | process: {(t_process_end - t_process_start) * 1000:.2f}ms | sort: {(t_sort_end - t_sort_start) * 1000:.2f}ms""")
+        user_agent = request.headers.get("User-Agent", "unknown")
+        log_entry = {
+            "bus_stop": busstopcode,
+            "total_ms": round(total_time * 1000, 2),
+            "api_ms": round((t_api_end - t_api_start) * 1000, 2),
+            "process_ms": round((t_process_end - t_process_start) * 1000, 2),
+            "sort_ms": round((t_sort_end - t_sort_start) * 1000, 2),
+            "user_agent": user_agent,
+        }
+        print(json.dumps(log_entry))
         # Background tasks for non-critical I/O
         # if userID is not None:
         #     asyncio.create_task(createRequest(busstopcode, busservicenos, userID))
