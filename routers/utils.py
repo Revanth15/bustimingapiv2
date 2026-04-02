@@ -65,7 +65,7 @@ def timeDifferenceToNowSg(target_time_str: str, current_time_sg: datetime) -> in
         print(f"Error parsing date string: {target_time_str}")
         return -100 # Indicate error or invalid time
 
-async def process_bus_service(busService: Dict[str, Any], current_time_sg: datetime) -> Optional[Dict[str, Any]]:
+def process_bus_service(busService: Dict[str, Any], current_time_sg: datetime) -> Optional[Dict[str, Any]]:
     """Processes a single bus service with minimal overhead."""
     if not (service_no := busService.get("ServiceNo")):
         return None

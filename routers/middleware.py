@@ -7,11 +7,19 @@ import httpx
 LOG_ENDPOINT = "https://bussinganalytics.vercel.app/api/log"
 
 class FirebaseLoggerMiddleware:
-    def __init__(self, app: FastAPI, exclude_prefixes: list[str] | None = None):
+    def __init__(
+        self,
+        app: FastAPI,
+        exclude_prefixes: list[str] | None = None,
+        exclude_exact: list[str] | None = None,
+    ):
         self.app = app
         self.exclude_prefixes = tuple(exclude_prefixes or [])
+        self.exclude_exact = set(exclude_exact or [])
 
     def _should_log(self, path: str) -> bool:
+        if path in self.exclude_exact:
+            return False
         return not path.startswith(self.exclude_prefixes)
 
     async def __call__(self, scope, receive, send):

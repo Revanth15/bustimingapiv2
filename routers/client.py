@@ -14,18 +14,18 @@ async def lifespan(app: FastAPI):
     global _client
     _client = httpx.AsyncClient(
         timeout=httpx.Timeout(
-            connect=2.0,   # fail fast if LTA unreachable
-            read=5.0,      # LTA is 50ms, 5s is generous
+            connect=2.0,
+            read=5.0,
             write=2.0,
-            pool=2.0
+            pool=5.0
         ),
         limits=httpx.Limits(
-            max_keepalive_connections=20,  # reuse up to 20 connections
-            max_connections=50,            # hard cap
-            keepalive_expiry=30            # keep connections alive 30s
+            max_keepalive_connections=100,
+            max_connections=300,
+            keepalive_expiry=30
         ),
-        headers={'AccountKey': os.getenv("ACCOUNT_KEY")},  # set once, reused forever
-        http2=True  # HTTP/2 multiplexing if LTA supports it
+        headers={'AccountKey': os.getenv("ACCOUNT_KEY")},
+        http2=True
     )
     yield
     await _client.aclose()

@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import json
 import sys
+import time
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 import pytz
@@ -223,6 +224,7 @@ async def get_bus_timing(
     userID: Optional[str] = None,
     background_tasks: BackgroundTasks = None
 ):
+    t0 = time.perf_counter()
     requested = set(busservicenos.split(',')) - {''}
     if not requested:
         raise HTTPException(400, "No bus services specified")
@@ -230,25 +232,48 @@ async def get_bus_timing(
     process_all = "all" in requested
     
     try:
+        t_api_start = time.perf_counter()
         response = await queryAPI("ltaodataservice/v3/BusArrival", {"BusStopCode": busstopcode})
+        t_api_end = time.perf_counter()
         services = response.get("Services", [])
         
         if not services:
+            total_time = time.perf_counter() - t0
+            print(f"[TIMING] total={total_time:.4f}s | api={(t_api_end - t_api_start):.4f}s | empty_response")
             return []
         
+        t_process_start = time.perf_counter()
         current_time = datetime.now(SINGAPORE_TZ)
         
-        results = await asyncio.gather(*[
+        results = [
             process_bus_service(s, current_time)
             for s in services
             if (no := s.get("ServiceNo")) and (process_all or no in requested)
-        ])
+        ]
+        t_process_end = time.perf_counter()
         
         # Filter None and sort
+        t_sort_start = time.perf_counter()
         valid = sorted(
             (r for r in results if r),
             key=lambda x: service_sort_key(x["serviceNo"])
         )
+        t_sort_end = time.perf_counter()
+
+        total_time = time.perf_counter() - t0
+
+        print(f"""
+        [TIMING]
+        bus_stop   : {busstopcode}
+        services   : {len(services)}
+        returned   : {len(valid)}
+
+        total      : {total_time * 1000:.2f} ms
+        api        : {(t_api_end - t_api_start) * 1000:.2f} ms
+        process    : {(t_process_end - t_process_start) * 1000:.2f} ms
+        sort       : {(t_sort_end - t_sort_start) * 1000:.2f} ms
+        """)
+
 
         # Background tasks for non-critical I/O
         # if userID is not None:

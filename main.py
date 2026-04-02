@@ -32,8 +32,11 @@ app.add_middleware(
         "/bustiming",
         "/health",
         "/favicon.ico",
-        "/transit_route"
-    ]
+        "/transit_route",
+    ],
+    exclude_exact=[
+        "/",  # only root is excluded
+    ],
 )
 
 app.add_middleware(
@@ -41,8 +44,11 @@ app.add_middleware(
     exclude_prefixes=[
         "/favicon.ico",
         "/health",
-        "/transit_route"
-    ]
+        "/transit_route",
+    ],
+    exclude_exact=[
+        "/",
+    ],
 )
 
 
