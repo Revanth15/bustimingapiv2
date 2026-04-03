@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+import psutil
 from routers.axiomMiddleware import AxiomLoggerMiddleware
 from routers.client import lifespan
 from routers.database import db_router as db_router 
@@ -33,6 +34,7 @@ app.add_middleware(
         "/health",
         "/favicon.ico",
         "/transit_route",
+        "/memory"
     ],
     exclude_exact=[
         "/",  # only root is excluded
@@ -45,6 +47,7 @@ app.add_middleware(
         "/favicon.ico",
         "/health",
         "/transit_route",
+        "/memory"
     ],
     exclude_exact=[
         "/",
@@ -56,6 +59,20 @@ app.add_middleware(
 async def root():
     return {"message": "Hello World"}
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    await AxiomLoggerMiddleware.shutdown()
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+@app.get("/memory")
+def memory():
+    process = psutil.Process(os.getpid())
+    mem = process.memory_info()
+
+    return {
+        "rss_mb": round(mem.rss / 1024 / 1024, 2),   # actual RAM used
+        "vms_mb": round(mem.vms / 1024 / 1024, 2),   # virtual memory
+    }

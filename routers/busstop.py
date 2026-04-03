@@ -9,10 +9,85 @@ from routers.cache import TWO_DAYS, cache
 from routers.database import getDBClient
 from routers.utils import cache_headers, process_bus_service, queryAPI, service_sort_key
 import asyncio
-from typing import Optional
+from typing import Any, Optional
 import logging
 
 logger = logging.getLogger()
+
+class CacheEntry:
+    __slots__ = ("value", "expires_at")
+
+    def __init__(self, value: Any, ttl: float):
+        self.value = value
+        self.expires_at = time.monotonic() + ttl
+
+    def is_expired(self) -> bool:
+        return time.monotonic() > self.expires_at
+
+
+# ── Cache store ───────────────────────────────────────────────────────────────
+class BusStopCache:
+    def __init__(self, ttl: float = 8.0, maxsize: int = 500):
+        self.ttl = ttl
+        self.maxsize = maxsize
+        self._store: dict[str, CacheEntry] = {}
+        self._inflight: dict[str, asyncio.Future] = {}
+        self._lock = asyncio.Lock()
+
+    def _evict_expired(self):
+        """Remove expired entries. Called opportunistically."""
+        now = time.monotonic()
+        expired = [k for k, v in self._store.items() if now > v.expires_at]
+        for k in expired:
+            del self._store[k]
+
+    async def get_or_fetch(self, key: str, fetch_fn) -> Any:
+        # Fast path: cache hit (no lock needed for reads)
+        entry = self._store.get(key)
+        if entry and not entry.is_expired():
+            return entry.value
+
+        async with self._lock:
+            # Re-check after acquiring lock (another coroutine may have fetched)
+            entry = self._store.get(key)
+            if entry and not entry.is_expired():
+                return entry.value
+
+            # Coalesce concurrent requests for the same key
+            # If a fetch is already in-flight, wait for it instead of firing another
+            if key in self._inflight:
+                future = self._inflight[key]
+
+            else:
+                future = asyncio.get_event_loop().create_future()
+                self._inflight[key] = future
+
+                # Evict if over capacity (simple LRU approximation: drop oldest)
+                if len(self._store) >= self.maxsize:
+                    self._evict_expired()
+                    if len(self._store) >= self.maxsize:
+                        oldest = next(iter(self._store))
+                        del self._store[oldest]
+
+        # Only the coroutine that created the future does the actual fetch
+        if not future.done():
+            try:
+                result = await fetch_fn()
+                async with self._lock:
+                    self._store[key] = CacheEntry(result, self.ttl)
+                    if key in self._inflight:
+                        del self._inflight[key]
+                future.set_result(result)
+            except Exception as e:
+                async with self._lock:
+                    if key in self._inflight:
+                        del self._inflight[key]
+                future.set_exception(e)
+
+        return await asyncio.shield(future)
+
+_cache = BusStopCache(ttl=8.0, maxsize=500)
+_sem = asyncio.Semaphore(30)
 
 # Prevent duplicate handlers (important in serverless environments)
 if not logger.handlers:
@@ -229,60 +304,70 @@ async def get_bus_timing(
     requested = set(busservicenos.split(',')) - {''}
     if not requested:
         raise HTTPException(400, "No bus services specified")
-    
+
     process_all = "all" in requested
-    
-    try:
-        t_api_start = time.perf_counter()
-        response = await queryAPI("ltaodataservice/v3/BusArrival", {"BusStopCode": busstopcode})
-        t_api_end = time.perf_counter()
-        services = response.get("Services", [])
-        
-        if not services:
+
+    async with _sem:
+        try:
+            t_api_start = time.perf_counter()
+
+            response = await _cache.get_or_fetch(
+                key=busstopcode,
+                fetch_fn=lambda: queryAPI(
+                    "ltaodataservice/v3/BusArrival",
+                    {"BusStopCode": busstopcode}
+                )
+            )
+
+            t_api_end = time.perf_counter()
+
+            services = response.get("Services", [])
+            if not services:
+                total_time = time.perf_counter() - t0
+                print(json.dumps({
+                    "bus_stop": busstopcode,
+                    "total_ms": round(total_time * 1000, 2),
+                    "api_ms": round((t_api_end - t_api_start) * 1000, 2),
+                    "cache_hit": True,
+                    "empty_response": True,
+                }))
+                return []
+
+            t_process_start = time.perf_counter()
+            current_time = datetime.now(SINGAPORE_TZ)
+
+            results = [
+                process_bus_service(s, current_time)
+                for s in services
+                if (no := s.get("ServiceNo")) and (process_all or no in requested)
+            ]
+
+            t_process_end = time.perf_counter()
+
+            t_sort_start = time.perf_counter()
+            valid = sorted(
+                (r for r in results if r),
+                key=lambda x: service_sort_key(x["serviceNo"])
+            )
+            t_sort_end = time.perf_counter()
+
             total_time = time.perf_counter() - t0
-            print(f"[TIMING] total={total_time:.4f}s | api={(t_api_end - t_api_start):.4f}s | empty_response")
-            return []
-        
-        t_process_start = time.perf_counter()
-        current_time = datetime.now(SINGAPORE_TZ)
-        
-        results = [
-            process_bus_service(s, current_time)
-            for s in services
-            if (no := s.get("ServiceNo")) and (process_all or no in requested)
-        ]
-        t_process_end = time.perf_counter()
-        
-        # Filter None and sort
-        t_sort_start = time.perf_counter()
-        valid = sorted(
-            (r for r in results if r),
-            key=lambda x: service_sort_key(x["serviceNo"])
-        )
-        t_sort_end = time.perf_counter()
+            api_ms = (t_api_end - t_api_start) * 1000
 
-        total_time = time.perf_counter() - t0
+            print(json.dumps({
+                "bus_stop": busstopcode,
+                "total_ms": round(total_time * 1000, 2),
+                "api_ms": round(api_ms, 2),
+                "cache_hit": api_ms < 1.0,   # sub-millisecond = cache hit
+                "process_ms": round((t_process_end - t_process_start) * 1000, 2),
+                "sort_ms": round((t_sort_end - t_sort_start) * 1000, 2),
+                "user_agent": request.headers.get("User-Agent", "unknown"),
+            }))
 
-        # print(f"""bus_stop: {busstopcode} || total: {total_time * 1000:.2f}ms | api: {(t_api_end - t_api_start) * 1000:.2f}ms | process: {(t_process_end - t_process_start) * 1000:.2f}ms | sort: {(t_sort_end - t_sort_start) * 1000:.2f}ms""")
-        user_agent = request.headers.get("User-Agent", "unknown")
-        log_entry = {
-            "bus_stop": busstopcode,
-            "total_ms": round(total_time * 1000, 2),
-            "api_ms": round((t_api_end - t_api_start) * 1000, 2),
-            "process_ms": round((t_process_end - t_process_start) * 1000, 2),
-            "sort_ms": round((t_sort_end - t_sort_start) * 1000, 2),
-            "user_agent": user_agent,
-        }
-        print(json.dumps(log_entry))
-        # Background tasks for non-critical I/O
-        # if userID is not None:
-        #     asyncio.create_task(createRequest(busstopcode, busservicenos, userID))
-        #     asyncio.create_task(updateUserDetails(userID))
-        
-        return valid
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error: {busstopcode} - {e}", file=sys.stderr)
-        raise HTTPException(500, "Service unavailable")
+            return valid
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Error: {busstopcode} - {e}", file=sys.stderr)
+            raise HTTPException(500, "Service unavailable")

@@ -303,17 +303,14 @@ def getFormattedBusRoutesData(busRoutes: dict):
     
     return bus_route_dict, dict(bus_stop_master_list)
         
+_SERVICE_NO_RE = re.compile(r"(\d+)([A-Za-z]*)")
+
 def service_sort_key(service_no: str):
     if not service_no:
         return (float("inf"), "")
-
-    match = re.match(r"(\d+)([A-Za-z]*)", service_no)
+    match = _SERVICE_NO_RE.match(service_no)
     if match:
-        number = int(match.group(1))
-        suffix = match.group(2)
-        return (number, suffix)
-
-    # Fallback: non-numeric service numbers go last
+        return (int(match.group(1)), match.group(2))
     return (float("inf"), service_no)
 
 def natural_sort_key(service_no):
