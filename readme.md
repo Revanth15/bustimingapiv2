@@ -36,15 +36,16 @@ uvicorn main:app --reload
 
 To keep bus data up to date, trigger the following endpoints **in this exact order**:
 
-| Step | Description | Endpoint |
-|------|-------------|----------|
+| Step | Description | Endpoint / Action |
+|------|-------------|------------------|
 | 1 | Extract all available buses | `GET /extractBusRoutesData` |
 | 2 | Extract bus services | `GET /getBusServicesData?overwrite=true` |
 | 3 | Update bus stops | `GET /extractBusStops` |
-| 4 | Run comparison script | Execute Python script to compare latest vs outdated data |
-| 5 | Generate polylines for new services | `POST /bus-routes/polylines` (use output list `c`) |
-| 6 | Bulk update bus routes | `POST /bulkUpdateBusRoutes` (use response from Step 5) |
-| 7 | Remove obsolete services | `DELETE /bus-routes` (use output list `d`) |
+| 4 | Extract raw bus route data | `GET /extractBusRoutesRawData` |
+| 5 | Run comparison script | Execute Python script to compare latest vs outdated data |
+| 6 | Generate polylines for new services | `POST /bus-routes/polylines` (use output list `c`) |
+| 7 | Bulk update bus routes | `POST /bulkUpdateBusRoutes` (use response from Step 6) |
+| 8 | Remove obsolete services | `DELETE /bus-routes` (use output list `d`) |
 
 > ⚠️ **Order matters.** Running these out of sequence may result in incomplete or inconsistent data.
 
@@ -60,7 +61,7 @@ To keep bus data up to date, trigger the following endpoints **in this exact ord
 
 ## ⚙️ End-to-End Flow Summary
 
-1. Refresh raw data (Steps 1–3)  
+1. Refresh raw data (Steps 1–4)  
 2. Run script to compute differences  
 3. Generate and insert polylines for new services  
 4. Remove outdated services 
