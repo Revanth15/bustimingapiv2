@@ -1,6 +1,6 @@
 import time
 
-TWO_DAYS = 60 * 60 * 24 * 2
+TWO_DAYS = 60 * 60 * 24 * 1
 
 class SimpleCache:
     def __init__(self):

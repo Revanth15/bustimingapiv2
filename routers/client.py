@@ -20,8 +20,8 @@ async def lifespan(app: FastAPI):
             pool=5.0
         ),
         limits=httpx.Limits(
-            max_keepalive_connections=100,
-            max_connections=300,
+            max_keepalive_connections=20,
+            max_connections=50,
             keepalive_expiry=30
         ),
         headers={'AccountKey': os.getenv("ACCOUNT_KEY")},

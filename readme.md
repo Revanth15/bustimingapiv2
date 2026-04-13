@@ -28,6 +28,7 @@ pip freeze > requirements.txt
 
 ```bash
 uvicorn main:app --reload
+.venv/bin/gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker --max-requests 1000 --max-requests-jitter 100 --timeout 30 --bind 0.0.0.0:8000
 ```
 
 ---

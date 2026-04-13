@@ -1,5 +1,5 @@
 annotated-types==0.7.0
-anyio==4.7.0
+anyio==4.13.0
 attrs==25.4.0
 certifi==2024.8.30
 cffi==2.0.0
@@ -13,6 +13,7 @@ email_validator==2.2.0
 fastapi==0.115.6
 fastapi-cli==0.0.6
 gotrue==2.12.4
+gunicorn==25.3.0
 h11==0.14.0
 h2==4.3.0
 hpack==4.1.0
