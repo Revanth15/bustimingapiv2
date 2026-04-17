@@ -2,15 +2,14 @@ from datetime import datetime
 import json
 from typing import List, Optional
 import uuid
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 import httpx
 from pydantic import BaseModel
 import pytz
 from routers.database import getDBClient
-from routers.utils import cache_headers, compress_to_gzip, getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, restructure_to_stops_only
-import gzip
-from routers.cache import TWO_DAYS, cache
+from routers.utils import cache_headers, getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, restructure_to_stops_only
+from routers.cache import ROUTE_CACHE_TTLS, blob_cache
 
 dbClient = getDBClient()
 
@@ -72,37 +71,27 @@ async def extract_bus_routes_raw_data():
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 @bus_router.get("/bus-routes/stops")
-async def get_bus_routes_by_stops():
+async def get_bus_routes_by_stops(request: Request):
     """
     Get bus routes data organized by bus stops only.
     """
     try:
-        # cached = cache.get("bus_routes_stops")
-        # if cached:
-        #     return Response(content=cached, media_type="application/json",
-        #                 headers={**cache_headers(), "Content-Encoding": "gzip", "X-Cache": "HIT"})
+        async def build_payload():
+            response = dbClient.table("bus_route_raw").select("bus_stop_code, json_value").execute()
 
-        response = dbClient.table("bus_route_raw").select("bus_stop_code, json_value").execute()
+            if not response.data:
+                return {"message": "No records available"}
 
-        if not response.data:
-            return {"message": "No records available"}
-
-        combined_data = {
-            row["bus_stop_code"]: json.loads(row["json_value"]) 
-            for row in response.data
-        }
-
-        compressed_data = compress_to_gzip(combined_data)
-        # cache.set("bus_routes_stops", compressed_data, ttl=TWO_DAYS)
-
-        return Response(
-            content=compressed_data,
-            media_type="application/json",
-            headers={
-                **cache_headers(),
-                "Content-Encoding": "gzip",
-                "X-Original-Size": str(len(json.dumps(combined_data))) 
+            return {
+                row["bus_stop_code"]: json.loads(row["json_value"])
+                for row in response.data
             }
+
+        return await blob_cache.get_cached_or_generate(
+            request=request,
+            route_key="/bus-routes/stops",
+            ttl_seconds=ROUTE_CACHE_TTLS["/bus-routes/stops"],
+            generator=build_payload,
         )
 
     except Exception as e:
@@ -200,38 +189,27 @@ async def extract_bus_stops():
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     
 @bus_router.get("/getBusRoutesData")
-async def get_bus_route_data():
-    key = "busRoute"
+async def get_bus_route_data(request: Request):
     try:
-        cached = cache.get("bus_routes")
-        if cached:
-            return Response(content=cached, media_type="application/json",
-                        headers={**cache_headers(), "Content-Encoding": "gzip", "X-Cache": "HIT"})
-        
-        response = dbClient.table("bus_route").select("service_no, json_value").execute()
+        async def build_payload():
+            response = dbClient.table("bus_route").select("service_no, json_value").execute()
 
-        if not response.data:
-            return {"message": "No records available"}
-        combined_data = []
+            if not response.data:
+                return {"message": "No records available"}
 
-        for row in response.data:
-            json_value = row["json_value"]
-            data = json.loads(json_value) if isinstance(json_value, str) else json_value
-            combined_data.append(data)
-        
+            combined_data = []
+            for row in response.data:
+                json_value = row["json_value"]
+                data = json.loads(json_value) if isinstance(json_value, str) else json_value
+                combined_data.append(data)
 
-        json_data = json.dumps(combined_data).encode("utf-8")
-        compressed_data = gzip.compress(json_data)
+            return combined_data
 
-        cache.set("bus_routes", compressed_data, ttl=TWO_DAYS)
-
-        return Response(
-            content=compressed_data,
-            media_type="application/json",
-            headers={
-                **cache_headers(),
-                "Content-Encoding": "gzip"
-            }
+        return await blob_cache.get_cached_or_generate(
+            request=request,
+            route_key="/getBusRoutesData",
+            ttl_seconds=ROUTE_CACHE_TTLS["/getBusRoutesData"],
+            generator=build_payload,
         )
     except Exception as e:
         print(f"Error fetching bus route data: {e}")
@@ -436,7 +414,7 @@ async def delete_bus_routes(request: DeleteRequest):
 @bus_router.post("/cache/purge")
 async def purge_cache(key: str = None):
     if key:
-        cache.delete(key)
-        return {"message": f"Cache key '{key}' purged"}
-    cache.clear()
-    return {"message": "All cache purged"}
+        deleted = blob_cache.delete(key)
+        return {"message": f"Cache key '{key}' purged", "deleted": deleted}
+    deleted = blob_cache.clear()
+    return {"message": "All cache purged", "deleted": deleted}

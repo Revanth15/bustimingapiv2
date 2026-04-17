@@ -2,12 +2,11 @@ from datetime import datetime, timedelta, timezone
 import json
 import sys
 import time
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 import pytz
-from routers.cache import TWO_DAYS, cache
+from routers.cache import ROUTE_CACHE_TTLS, blob_cache
 from routers.database import getDBClient
-from routers.utils import cache_headers, process_bus_service, queryAPI, service_sort_key
+from routers.utils import process_bus_service, queryAPI, service_sort_key
 import asyncio
 from typing import Any, Optional
 import logging
@@ -247,46 +246,38 @@ async def extract_bus_stops():
 
 
 @busStops_router.get("/getallbusstops")
-async def get_all_bus_stops():
+async def get_all_bus_stops(request: Request):
     """
     Retrieve all bus stop information stored in PocketBase.
     """
     try:
-        # See if cache hit is possible
-        cached = cache.get("bus_stops")
-        if cached:
-            return Response(content={"busStops": cached}, media_type="application/json",
-                        headers={**cache_headers(), "Content-Encoding": "gzip", "X-Cache": "HIT"})
-        
+        async def build_payload():
+            response = dbClient.table("bus_stops").select(
+                "id, description, latitude, longitude, road_name, bus_services"
+            ).execute()
 
-        response = dbClient.table("bus_stops").select("id, description, latitude, longitude, road_name, bus_services").execute()
-        bus_stop_data = []
-        for stop in response.data:
-            bus_stop_data.append({
-                "id": stop["id"],
-                "description": stop["description"],
-                "latitude": stop["latitude"],
-                "longitude": stop["longitude"],
-                "road_name": stop["road_name"],
-                "bus_services": stop["bus_services"]
-            })
+            if not response.data:
+                return {"message": "No records available"}
 
-        # return {"busStops": bus_stop_data}
-        # full_structure = {"busStops": bus_stop_data}
-        # json_string = json.dumps(full_structure, separators=(',', ':'))
-        # json_bytes = json_string.encode("utf-8")
-        # compressed_data = gzip.compress(json_bytes)
+            bus_stop_data = []
+            for stop in response.data:
+                bus_stop_data.append({
+                    "id": stop["id"],
+                    "description": stop["description"],
+                    "latitude": stop["latitude"],
+                    "longitude": stop["longitude"],
+                    "road_name": stop["road_name"],
+                    "bus_services": stop["bus_services"],
+                })
 
-        # return Response(
-        #     content=compressed_data,
-        #     media_type="application/json",
-        #     headers={
-        #         **cache_headers(),
-        #         "Content-Encoding": "gzip"
-        #     }
-        # )
-        cache.set("bus_routes_stops", bus_stop_data, ttl=TWO_DAYS)
-        return JSONResponse(content={"busStops": bus_stop_data}, headers=cache_headers())
+            return {"busStops": bus_stop_data}
+
+        return await blob_cache.get_cached_or_generate(
+            request=request,
+            route_key="/getallbusstops",
+            ttl_seconds=ROUTE_CACHE_TTLS["/getallbusstops"],
+            generator=build_payload,
+        )
     
     except Exception as e:
         print(f"Error retrieving bus stops: {e}")
