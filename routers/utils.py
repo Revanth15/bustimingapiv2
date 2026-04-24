@@ -5,7 +5,9 @@ import json
 # import geopandas as gpd
 import logging
 import os
+import sys
 import time
+import traceback
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
@@ -74,6 +76,28 @@ def _serialize_log_context(context: dict[str, Any]) -> str:
     )
 
 
+def emit_structured_log(level: str, event: str, **context: Any) -> None:
+    payload = {
+        "ts": datetime.utcnow().isoformat(timespec="milliseconds") + "Z",
+        "level": level,
+        "event": event,
+        **context,
+    }
+    stream = sys.stderr if level in {"warning", "error"} else sys.stdout
+    print(_serialize_log_context(payload), file=stream, flush=True)
+
+
+def emit_exception_log(level: str, event: str, exc: Exception, **context: Any) -> None:
+    emit_structured_log(
+        level,
+        event,
+        exception_type=type(exc).__name__,
+        error=str(exc),
+        traceback=traceback.format_exc(),
+        **context,
+    )
+
+
 # Query LTA's API
 async def queryAPI(path: str, params: dict) -> dict:
     url = f"https://datamall2.mytransport.sg/{path}"
@@ -88,22 +112,18 @@ async def queryAPI(path: str, params: dict) -> dict:
             return response.json()
         except httpx.HTTPStatusError as exc:
             elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
-            logger.warning(
-                "lta_api_http_status_error %s",
-                _serialize_log_context(
-                    {
-                        "event": "lta_api_http_status_error",
-                        "path": path,
-                        "url": str(exc.request.url),
-                        "params": params,
-                        "bus_stop_code": params.get("BusStopCode"),
-                        "status_code": exc.response.status_code,
-                        "attempt": attempt,
-                        "max_attempts": max_attempts,
-                        "elapsed_ms": elapsed_ms,
-                        "response_text": exc.response.text[:500],
-                    }
-                ),
+            emit_structured_log(
+                "warning",
+                "lta_api_http_status_error",
+                path=path,
+                url=str(exc.request.url),
+                params=params,
+                bus_stop_code=params.get("BusStopCode"),
+                status_code=exc.response.status_code,
+                attempt=attempt,
+                max_attempts=max_attempts,
+                elapsed_ms=elapsed_ms,
+                response_text=exc.response.text[:500],
             )
             raise HTTPException(503, "Error contacting LTA API") from exc
         except httpx.RequestError as exc:
@@ -111,25 +131,19 @@ async def queryAPI(path: str, params: dict) -> dict:
             is_retryable = isinstance(exc, RETRYABLE_REQUEST_ERRORS)
             will_retry = is_retryable and attempt < max_attempts
             request = exc.request
-            logger.warning(
-                "lta_api_request_error %s",
-                _serialize_log_context(
-                    {
-                        "event": "lta_api_request_error",
-                        "path": path,
-                        "url": str(request.url) if request else url,
-                        "params": params,
-                        "bus_stop_code": params.get("BusStopCode"),
-                        "exception_type": type(exc).__name__,
-                        "error": str(exc),
-                        "attempt": attempt,
-                        "max_attempts": max_attempts,
-                        "elapsed_ms": elapsed_ms,
-                        "retryable": is_retryable,
-                        "will_retry": will_retry,
-                    }
-                ),
-                exc_info=True,
+            emit_exception_log(
+                "warning",
+                "lta_api_request_error",
+                exc,
+                path=path,
+                url=str(request.url) if request else url,
+                params=params,
+                bus_stop_code=params.get("BusStopCode"),
+                attempt=attempt,
+                max_attempts=max_attempts,
+                elapsed_ms=elapsed_ms,
+                retryable=is_retryable,
+                will_retry=will_retry,
             )
             if will_retry:
                 await asyncio.sleep(0.25 * attempt)
@@ -137,22 +151,17 @@ async def queryAPI(path: str, params: dict) -> dict:
             raise HTTPException(503, "Error contacting LTA API") from exc
         except Exception as exc:
             elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
-            logger.exception(
-                "lta_api_unexpected_error %s",
-                _serialize_log_context(
-                    {
-                        "event": "lta_api_unexpected_error",
-                        "path": path,
-                        "url": url,
-                        "params": params,
-                        "bus_stop_code": params.get("BusStopCode"),
-                        "exception_type": type(exc).__name__,
-                        "error": str(exc),
-                        "attempt": attempt,
-                        "max_attempts": max_attempts,
-                        "elapsed_ms": elapsed_ms,
-                    }
-                ),
+            emit_exception_log(
+                "error",
+                "lta_api_unexpected_error",
+                exc,
+                path=path,
+                url=url,
+                params=params,
+                bus_stop_code=params.get("BusStopCode"),
+                attempt=attempt,
+                max_attempts=max_attempts,
+                elapsed_ms=elapsed_ms,
             )
             raise HTTPException(500, "Internal error during API query") from exc
 

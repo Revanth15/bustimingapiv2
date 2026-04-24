@@ -6,7 +6,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 import pytz
 from routers.cache import ROUTE_CACHE_TTLS, blob_cache
 from routers.database import getDBClient
-from routers.utils import process_bus_service, queryAPI, service_sort_key
+from routers.utils import emit_exception_log, emit_structured_log, process_bus_service, queryAPI, service_sort_key
 import asyncio
 from typing import Any, Optional
 import logging
@@ -123,29 +123,8 @@ dbClient = getDBClient()
 busStops_router = APIRouter()
 SINGAPORE_TZ = timezone(timedelta(hours=8))
 
-
-def _log_bustiming_event(level: int, event: str, **context: Any) -> None:
-    def format_value(value: Any) -> str:
-        if value is None:
-            return "null"
-        if isinstance(value, bool):
-            return str(value).lower()
-        if isinstance(value, (int, float)):
-            return str(value)
-        if isinstance(value, (list, dict, tuple, set)):
-            return json.dumps(value, default=str, sort_keys=True)
-        text = str(value)
-        if text and all(ch.isalnum() or ch in "._:/-," for ch in text):
-            return text
-        return json.dumps(text)
-
-    logger.log(
-        level,
-        " ".join(
-            f"{key}={format_value(value)}"
-            for key, value in sorted({"event": event, **context}.items())
-        ),
-    )
+def _log_bustiming_event(level: str, event: str, **context: Any) -> None:
+    emit_structured_log(level, event, route="/bustiming", **context)
 
 @busStops_router.get("/extractBusStops")
 async def extract_bus_stops():
@@ -341,7 +320,7 @@ async def get_bus_timing(
                 total_time = time.perf_counter() - t0
                 api_ms = round((t_api_end - t_api_start) * 1000, 2)
                 _log_bustiming_event(
-                    logging.INFO,
+                    "info",
                     "empty_response",
                     bus_stop=busstopcode,
                     total_ms=round(total_time * 1000, 2),
@@ -374,7 +353,7 @@ async def get_bus_timing(
             api_ms = (t_api_end - t_api_start) * 1000
 
             _log_bustiming_event(
-                logging.INFO,
+                "info",
                 "success",
                 bus_stop=busstopcode,
                 total_ms=round(total_time * 1000, 2),
@@ -389,7 +368,7 @@ async def get_bus_timing(
 
         except HTTPException as exc:
             _log_bustiming_event(
-                logging.WARNING if exc.status_code < 500 else logging.ERROR,
+                "warning" if exc.status_code < 500 else "error",
                 "http_error",
                 bus_stop=busstopcode,
                 status_code=exc.status_code,
@@ -399,12 +378,13 @@ async def get_bus_timing(
             )
             raise
         except Exception as exc:
-            logger.exception(
-                "event=unhandled_error bus_stop=%s exception_type=%s total_ms=%s user_agent=%s error=%s",
-                busstopcode,
-                type(exc).__name__,
-                round((time.perf_counter() - t0) * 1000, 2),
-                request.headers.get("User-Agent", "unknown"),
-                json.dumps(str(exc)),
+            emit_exception_log(
+                "error",
+                "unhandled_error",
+                exc,
+                route="/bustiming",
+                bus_stop=busstopcode,
+                total_ms=round((time.perf_counter() - t0) * 1000, 2),
+                user_agent=request.headers.get("User-Agent", "unknown"),
             )
             raise HTTPException(500, "Service unavailable")
