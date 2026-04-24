@@ -1,8 +1,11 @@
+import asyncio
 from datetime import datetime
 import gzip
 import json
 # import geopandas as gpd
+import logging
 import os
+import time
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
@@ -13,6 +16,7 @@ import re
 from routers.client import get_client
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 def getEnvVariable(key: str, required: bool = True) -> str:
     """
@@ -35,20 +39,122 @@ def getEnvVariable(key: str, required: bool = True) -> str:
 
 ACCOUNT_KEY = getEnvVariable("ACCOUNT_KEY")
 
+RETRYABLE_REQUEST_ERRORS = (
+    httpx.CloseError,
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.ReadError,
+    httpx.ReadTimeout,
+    httpx.RemoteProtocolError,
+    httpx.WriteError,
+    httpx.WriteTimeout,
+)
+
+
+def _format_log_value(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, dict, tuple, set)):
+        return json.dumps(value, default=str, sort_keys=True)
+    text = str(value)
+    if text and all(ch.isalnum() or ch in "._:/-," for ch in text):
+        return text
+    return json.dumps(text)
+
+
+def _serialize_log_context(context: dict[str, Any]) -> str:
+    return " ".join(
+        f"{key}={_format_log_value(value)}"
+        for key, value in sorted(context.items())
+    )
+
+
 # Query LTA's API
 async def queryAPI(path: str, params: dict) -> dict:
     url = f"https://datamall2.mytransport.sg/{path}"
     client = get_client()
-    try:
-        response = await client.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
-    except httpx.RequestError as exc:
-        print(f"Request error {exc.request.url!r}: {exc}")
-        raise HTTPException(503, f"Error contacting LTA API: {exc}")
-    except Exception as e:
-        print(f"Unexpected error during API query: {e}")
-        raise HTTPException(500, "Internal error during API query")
+    max_attempts = 3
+
+    for attempt in range(1, max_attempts + 1):
+        started_at = time.perf_counter()
+        try:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as exc:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            logger.warning(
+                "lta_api_http_status_error %s",
+                _serialize_log_context(
+                    {
+                        "event": "lta_api_http_status_error",
+                        "path": path,
+                        "url": str(exc.request.url),
+                        "params": params,
+                        "bus_stop_code": params.get("BusStopCode"),
+                        "status_code": exc.response.status_code,
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "elapsed_ms": elapsed_ms,
+                        "response_text": exc.response.text[:500],
+                    }
+                ),
+            )
+            raise HTTPException(503, "Error contacting LTA API") from exc
+        except httpx.RequestError as exc:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            is_retryable = isinstance(exc, RETRYABLE_REQUEST_ERRORS)
+            will_retry = is_retryable and attempt < max_attempts
+            request = exc.request
+            logger.warning(
+                "lta_api_request_error %s",
+                _serialize_log_context(
+                    {
+                        "event": "lta_api_request_error",
+                        "path": path,
+                        "url": str(request.url) if request else url,
+                        "params": params,
+                        "bus_stop_code": params.get("BusStopCode"),
+                        "exception_type": type(exc).__name__,
+                        "error": str(exc),
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "elapsed_ms": elapsed_ms,
+                        "retryable": is_retryable,
+                        "will_retry": will_retry,
+                    }
+                ),
+                exc_info=True,
+            )
+            if will_retry:
+                await asyncio.sleep(0.25 * attempt)
+                continue
+            raise HTTPException(503, "Error contacting LTA API") from exc
+        except Exception as exc:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            logger.exception(
+                "lta_api_unexpected_error %s",
+                _serialize_log_context(
+                    {
+                        "event": "lta_api_unexpected_error",
+                        "path": path,
+                        "url": url,
+                        "params": params,
+                        "bus_stop_code": params.get("BusStopCode"),
+                        "exception_type": type(exc).__name__,
+                        "error": str(exc),
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "elapsed_ms": elapsed_ms,
+                    }
+                ),
+            )
+            raise HTTPException(500, "Internal error during API query") from exc
 
 def timeDifferenceToNowSg(target_time_str: str, current_time_sg: datetime) -> int:
     """Calculates the difference in minutes between target time and provided current time."""
