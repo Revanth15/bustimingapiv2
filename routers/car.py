@@ -1,7 +1,17 @@
 from collections import defaultdict
-from fastapi import APIRouter, HTTPException, Response
+import time
+from fastapi import APIRouter, HTTPException, Request, Response
 from routers.database import getDBClient
-from routers.utils import compress_to_gzip, getAllEVChargingPointsFromLTA, getCarParkAvailabilityFromLTA, getTrafficIncidentsFromLTA, getVMSFromLTA, queryAPI
+from routers.utils import (
+    compress_to_gzip,
+    emit_route_exception,
+    emit_route_http_error,
+    getAllEVChargingPointsFromLTA,
+    getCarParkAvailabilityFromLTA,
+    getTrafficIncidentsFromLTA,
+    getVMSFromLTA,
+    queryAPI,
+)
 import re
 from datetime import datetime
 
@@ -102,13 +112,16 @@ camera_id_descriptions = {
 }
 
 @car_related_router.get("/traffic_images")
-async def get_traffic_images():
+async def get_traffic_images(request: Request):
+    t0 = time.perf_counter()
+    stage = "fetch_upstream"
     try:
         ltaResponse = await queryAPI("ltaodataservice/Traffic-Imagesv2", {})
         images = ltaResponse.get("value", [])
         if not images:
              return []
-        
+
+        stage = "process_response"
         processed_images = []
         for img in images:
             image_link = img.get("ImageLink", "")
@@ -139,19 +152,24 @@ async def get_traffic_images():
 
         return processed_images
     except HTTPException as he:
+        emit_route_http_error("/traffic_images", request, he, t0, stage=stage)
         raise he
-    except Exception as e:
-        print(f"Unexpected error: {e}")
+    except Exception as exc:
+        print(f"Unexpected error: {exc}")
+        emit_route_exception("/traffic_images", request, exc, t0, stage=stage)
         raise HTTPException(status_code=500, detail="Internal server error")
     
 
 @car_related_router.get("/car_park_availability")
-async def get_parking_availability():
+async def get_parking_availability(request: Request):
+    t0 = time.perf_counter()
+    stage = "fetch_upstream"
     try:
         car_parks = await getCarParkAvailabilityFromLTA()
         if not car_parks:
             return []
 
+        stage = "process_response"
         # Group car parks by CarParkID
         groups = defaultdict(list)
         for cp in car_parks:
@@ -219,19 +237,24 @@ async def get_parking_availability():
         )
 
     except HTTPException as he:
+        emit_route_http_error("/car_park_availability", request, he, t0, stage=stage)
         raise he
-    except Exception as e:
-        print(f"Unexpected error: {e}")
+    except Exception as exc:
+        print(f"Unexpected error: {exc}")
+        emit_route_exception("/car_park_availability", request, exc, t0, stage=stage)
         raise HTTPException(status_code=500, detail="Internal server error")
     
 @car_related_router.get("/traffic_incidents")
-async def traffic_incidents():
+async def traffic_incidents(request: Request):
+    t0 = time.perf_counter()
+    stage = "fetch_upstream"
     try:
         traffic_incidents = await getTrafficIncidentsFromLTA()
         vms = await getVMSFromLTA()
 
         all_incidents = traffic_incidents + vms
 
+        stage = "process_response"
         processed_incidents = []
         for inc in all_incidents:
             inc_type = inc.get("Type", "VMS")
@@ -245,16 +268,21 @@ async def traffic_incidents():
         return processed_incidents
 
     except HTTPException as he:
+        emit_route_http_error("/traffic_incidents", request, he, t0, stage=stage)
         raise he
-    except Exception as e:
-        print(f"Unexpected error: {e}")
+    except Exception as exc:
+        print(f"Unexpected error: {exc}")
+        emit_route_exception("/traffic_incidents", request, exc, t0, stage=stage)
         raise HTTPException(status_code=500, detail="Internal server error")
     
 @car_related_router.get("/ev_charging")
-async def ev_charging():
+async def ev_charging(request: Request):
+    t0 = time.perf_counter()
+    stage = "fetch_upstream"
     try:
         ev_charging = await getAllEVChargingPointsFromLTA()
 
+        stage = "process_response"
         compressed_data = compress_to_gzip(ev_charging["evLocationsData"])
 
         return Response(
@@ -266,7 +294,9 @@ async def ev_charging():
         )
 
     except HTTPException as he:
+        emit_route_http_error("/ev_charging", request, he, t0, stage=stage)
         raise he
-    except Exception as e:
-        print(f"Unexpected error: {e}")
+    except Exception as exc:
+        print(f"Unexpected error: {exc}")
+        emit_route_exception("/ev_charging", request, exc, t0, stage=stage)
         raise HTTPException(status_code=500, detail="Internal server error")

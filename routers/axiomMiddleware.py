@@ -4,7 +4,7 @@ import time
 import threading
 from fastapi import FastAPI, Request
 import httpx
-from routers.utils import getEnvVariable
+from routers.utils import getEnvVariable, get_client_ip
 
 AXIOM_TOKEN = getEnvVariable("AXIOM_TOKEN")
 AXIOM_DATASET = getEnvVariable("AXIOM_DATASET")
@@ -47,7 +47,7 @@ class AxiomLoggerMiddleware:
                     "path": request.url.path,
                     "status": message["status"],
                     "duration_ms": round(duration_ms, 2),
-                    "ip": get_real_ip(request),
+                    "ip": get_client_ip(request),
                     "user_agent": request.headers.get("user-agent"),
                     "params": dict(request.query_params),
                 }
@@ -75,20 +75,3 @@ class AxiomLoggerMiddleware:
         except Exception:
             # Fail silently
             pass
-    
-def get_real_ip(request: Request) -> str | None:
-    headers = request.headers
-
-    # Fly.io (primary)
-    if fly_ip := headers.get("fly-client-ip"):
-        return fly_ip
-
-    # Vercel (backup)
-    if vercel_ip := headers.get("x-vercel-forwarded-for"):
-        return vercel_ip.split(",")[0].strip()
-
-    # Standard fallback
-    if xff := headers.get("x-forwarded-for"):
-        return xff.split(",")[0].strip()
-
-    return request.client.host if request.client else None

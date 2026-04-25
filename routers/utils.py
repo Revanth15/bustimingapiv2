@@ -11,7 +11,7 @@ import traceback
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 import httpx
 import re
 
@@ -51,6 +51,16 @@ RETRYABLE_REQUEST_ERRORS = (
     httpx.RemoteProtocolError,
     httpx.WriteError,
     httpx.WriteTimeout,
+)
+
+SENSITIVE_QUERY_PARAM_TOKENS = (
+    "token",
+    "password",
+    "secret",
+    "authorization",
+    "cookie",
+    "email",
+    "message",
 )
 
 
@@ -96,6 +106,113 @@ def emit_exception_log(level: str, event: str, exc: Exception, **context: Any) -
         traceback=traceback.format_exc(),
         **context,
     )
+
+
+def get_client_ip(request: Request) -> str | None:
+    headers = request.headers
+
+    if fly_ip := headers.get("fly-client-ip"):
+        return fly_ip
+
+    if vercel_ip := headers.get("x-vercel-forwarded-for"):
+        return vercel_ip.split(",")[0].strip()
+
+    if xff := headers.get("x-forwarded-for"):
+        return xff.split(",")[0].strip()
+
+    return request.client.host if request.client else None
+
+
+def _safe_query_params(request: Request) -> dict[str, str]:
+    safe_params: dict[str, str] = {}
+    for key, value in request.query_params.items():
+        key_lower = key.lower()
+        if any(token in key_lower for token in SENSITIVE_QUERY_PARAM_TOKENS):
+            continue
+        safe_params[key] = value
+    return safe_params
+
+
+def route_base_context(request: Request, route: str, started_at: float) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "route": route,
+        "method": request.method,
+        "total_ms": round((time.perf_counter() - started_at) * 1000, 2),
+        "ip": get_client_ip(request),
+        "user_agent": request.headers.get("user-agent", "unknown"),
+    }
+    params = _safe_query_params(request)
+    if params:
+        context["params"] = params
+    return context
+
+
+def emit_route_http_error(
+    route: str,
+    request: Request,
+    exc: HTTPException,
+    started_at: float,
+    **context: Any,
+) -> None:
+    emit_structured_log(
+        "warning" if exc.status_code < 500 else "error",
+        "http_error",
+        **route_base_context(request, route, started_at),
+        status_code=exc.status_code,
+        detail=exc.detail,
+        **context,
+    )
+
+
+def emit_route_exception(
+    route: str,
+    request: Request,
+    exc: Exception,
+    started_at: float,
+    **context: Any,
+) -> None:
+    emit_exception_log(
+        "error",
+        "unhandled_error",
+        exc,
+        **route_base_context(request, route, started_at),
+        **context,
+    )
+
+
+def redact_device_token(token: Any) -> dict[str, Any]:
+    text = str(token or "")
+    return {
+        "device_token_suffix": text[-6:] if text else "",
+        "device_token_length": len(text),
+    }
+
+
+def redact_feedback_message(message: Any) -> dict[str, Any]:
+    return {"message_chars": len(str(message or ""))}
+
+
+def redact_email(email: Any) -> dict[str, Any]:
+    text = str(email or "").strip()
+    domain = text.split("@", 1)[1].lower() if "@" in text else ""
+    return {
+        "email_domain": domain,
+        "email_present": bool(text),
+    }
+
+
+def redact_coordinates(
+    start_lat: float,
+    start_lon: float,
+    end_lat: float,
+    end_lon: float,
+) -> dict[str, Any]:
+    return {
+        "start_lat_3dp": round(start_lat, 3),
+        "start_lon_3dp": round(start_lon, 3),
+        "end_lat_3dp": round(end_lat, 3),
+        "end_lon_3dp": round(end_lon, 3),
+    }
 
 
 # Query LTA's API

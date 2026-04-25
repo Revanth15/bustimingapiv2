@@ -1,8 +1,10 @@
-from fastapi import APIRouter, HTTPException
+import time
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from datetime import datetime
 
 from routers.database import getDBClient
+from routers.utils import emit_route_exception, emit_route_http_error, redact_device_token, redact_feedback_message
 
 class FeedbackRequest(BaseModel):
     device_token: str
@@ -14,7 +16,9 @@ dbClient = getDBClient()
 feedback_router = APIRouter()
 
 @feedback_router.post("/submitFeedback")
-async def submit_feedback(feedback: FeedbackRequest):
+async def submit_feedback(request: Request, feedback: FeedbackRequest):
+    t0 = time.perf_counter()
+    stage = "insert_feedback"
     try:
         data = {
             "device_token": feedback.device_token,
@@ -27,6 +31,28 @@ async def submit_feedback(feedback: FeedbackRequest):
             return {"message": "Feedback submitted successfully"}
         else:
             raise HTTPException(status_code=500, detail="Failed to insert feedback")
-    except Exception as e:
-        print(f"Error submitting feedback: {e}")
+    except HTTPException as exc:
+        emit_route_http_error(
+            "/submitFeedback",
+            request,
+            exc,
+            t0,
+            stage=stage,
+            **redact_device_token(feedback.device_token),
+            **redact_feedback_message(feedback.message),
+            app_version=feedback.app_version,
+        )
+        raise
+    except Exception as exc:
+        print(f"Error submitting feedback: {exc}")
+        emit_route_exception(
+            "/submitFeedback",
+            request,
+            exc,
+            t0,
+            stage=stage,
+            **redact_device_token(feedback.device_token),
+            **redact_feedback_message(feedback.message),
+            app_version=feedback.app_version,
+        )
         raise HTTPException(status_code=500, detail="Error submitting feedback")

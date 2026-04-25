@@ -6,7 +6,15 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 import pytz
 from routers.cache import ROUTE_CACHE_TTLS, blob_cache
 from routers.database import getDBClient
-from routers.utils import emit_exception_log, emit_structured_log, process_bus_service, queryAPI, service_sort_key
+from routers.utils import (
+    emit_exception_log,
+    emit_route_exception,
+    emit_route_http_error,
+    emit_structured_log,
+    process_bus_service,
+    queryAPI,
+    service_sort_key,
+)
 import asyncio
 from typing import Any, Optional
 import logging
@@ -127,7 +135,7 @@ def _log_bustiming_event(level: str, event: str, **context: Any) -> None:
     emit_structured_log(level, event, route="/bustiming", **context)
 
 @busStops_router.get("/extractBusStops")
-async def extract_bus_stops():
+async def extract_bus_stops(request: Request):
     """
     Extract bus stop data from the LTA API and store/update in Supabase.
     - Fetches bus stops from LTA API in batches.
@@ -135,6 +143,9 @@ async def extract_bus_stops():
     - Upserts into bus_stops table with id as BusStopCode (TEXT).
     - Includes modified_at timestamp in SGT (GMT+8).
     """
+    t0 = time.perf_counter()
+    stage = "load_bus_stop_services"
+
     try:
         # Get bus_stop_master_list from jsons table
         logger.info("Fetching bus_stop_master_list from jsons table...")
@@ -148,6 +159,7 @@ async def extract_bus_stops():
             bus_stop_master_list = json.loads(bus_stop_master_list)
 
         # Get all existing bus stops
+        stage = "load_existing_stops"
         logger.info("Fetching existing bus stops from Supabase...")
         bus_stop_map = {}
         offset = 0
@@ -162,6 +174,7 @@ async def extract_bus_stops():
         logger.info(f"Fetched {len(bus_stop_map)} existing bus stops")
 
         # Fetch bus stops from LTA API
+        stage = "fetch_lta_bus_stops"
         logger.info("Fetching bus stops from LTA API...")
         counter = 0
         results = []
@@ -181,6 +194,7 @@ async def extract_bus_stops():
         sgt_timezone = pytz.timezone("Asia/Singapore")
         current_timestamp = datetime.now(sgt_timezone).isoformat()
 
+        stage = "diff_records"
         new_busstops = []
         updated_busstops = []
 
@@ -221,6 +235,7 @@ async def extract_bus_stops():
         # Upsert new and updated bus stops in batches
         all_busstops = new_busstops + updated_busstops
         if all_busstops:
+            stage = "upsert_bus_stops"
             logger.info("Upserting bus stops (batched)...")
             batch_size = 1000
             for i in range(0, len(all_busstops), batch_size):
@@ -234,6 +249,7 @@ async def extract_bus_stops():
                     raise HTTPException(status_code=500, detail="Failed to upsert bus stops")
 
         # Verify stored data
+        stage = "verify_count"
         stored_busstops = dbClient.table("bus_stops").select("id", count="exact").execute()
         logger.info(f"Total stored bus stops: {stored_busstops.count}")
 
@@ -243,9 +259,13 @@ async def extract_bus_stops():
             "updated": len(updated_busstops)
         }
 
-    except Exception as e:
-        logger.error(f"Error processing bus stops: {e}")
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    except HTTPException as exc:
+        emit_route_http_error("/extractBusStops", request, exc, t0, stage=stage)
+        raise
+    except Exception as exc:
+        logger.error(f"Error processing bus stops: {exc}")
+        emit_route_exception("/extractBusStops", request, exc, t0, stage=stage)
+        raise HTTPException(status_code=500, detail=f"Error: {str(exc)}")
 
 
 @busStops_router.get("/getallbusstops")
@@ -253,6 +273,9 @@ async def get_all_bus_stops(request: Request):
     """
     Retrieve all bus stop information stored in PocketBase.
     """
+    t0 = time.perf_counter()
+    stage = "load_bus_stops"
+
     try:
         async def build_payload():
             response = dbClient.table("bus_stops").select(
@@ -282,8 +305,12 @@ async def get_all_bus_stops(request: Request):
             generator=build_payload,
         )
     
-    except Exception as e:
-        print(f"Error retrieving bus stops: {e}")
+    except HTTPException as exc:
+        emit_route_http_error("/getallbusstops", request, exc, t0, stage=stage)
+        raise
+    except Exception as exc:
+        print(f"Error retrieving bus stops: {exc}")
+        emit_route_exception("/getallbusstops", request, exc, t0, stage=stage)
         raise HTTPException(status_code=500, detail="Failed to retrieve bus stops")
 
 @busStops_router.get("/bustiming")

@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from routers.cache import ROUTE_CACHE_TTLS, blob_cache
 from routers.database import getDBClient
-from routers.utils import queryAPI
+from routers.utils import emit_route_exception, emit_route_http_error, queryAPI
 
 dbClient = getDBClient()
 MRT_router = APIRouter()
@@ -285,15 +285,29 @@ def _upsert_rail_payloads(
         raise HTTPException(status_code=500, detail="Failed to store rail map data in Supabase")
 
 
-async def _build_and_seed_all_rail_payloads() -> dict[str, dict[str, Any]]:
+async def _build_and_seed_all_rail_payloads(
+    set_stage: Optional[Callable[[str], None]] = None,
+) -> dict[str, dict[str, Any]]:
+    if set_stage:
+        set_stage("fetch_geojson")
     geojson = await _fetch_rail_geojson()
     features = geojson.get("features", [])
 
+    if set_stage:
+        set_stage("build_station_index")
     station_index = _build_station_index(features)
+    if set_stage:
+        set_stage("build_lines_payload")
     lines_payload = _build_lines_payload(features)
+    if set_stage:
+        set_stage("build_stations_payload")
     stations_payload = _build_stations_payload(features, station_index)
+    if set_stage:
+        set_stage("build_exits_payload")
     exits_payload = _build_exits_payload(features, station_index)
 
+    if set_stage:
+        set_stage("upsert_jsons")
     _upsert_rail_payloads(lines_payload, stations_payload, exits_payload)
 
     return {
@@ -305,8 +319,11 @@ async def _build_and_seed_all_rail_payloads() -> dict[str, dict[str, Any]]:
 
 async def _load_json_row_or_seed(
     row_id: str,
-    builder_fn: Callable[[], Any],
+    builder_fn: Callable[..., Any],
+    set_stage: Optional[Callable[[str], None]] = None,
 ) -> dict[str, Any]:
+    if set_stage:
+        set_stage("load_json_row")
     try:
         response = dbClient.table("jsons").select("json_value").eq("id", row_id).execute()
     except Exception as exc:
@@ -317,7 +334,7 @@ async def _load_json_row_or_seed(
         return json.loads(json_value) if isinstance(json_value, str) else json_value
 
     try:
-        seeded_payloads = builder_fn()
+        seeded_payloads = builder_fn() if set_stage is None else builder_fn(set_stage)
         if hasattr(seeded_payloads, "__await__"):
             seeded_payloads = await seeded_payloads
     except HTTPException as exc:
@@ -334,7 +351,12 @@ async def _load_json_row_or_seed(
 
 
 @MRT_router.get("/mrt_crowd_density")
-async def get_mrt_crowd_density(mrt_lines: List[str] = Query(..., description="List of MRT lines")):
+async def get_mrt_crowd_density(
+    request: Request,
+    mrt_lines: List[str] = Query(..., description="List of MRT lines"),
+):
+    t0 = time.perf_counter()
+    stage = "fetch_lta_crowd_density"
     try:
         start_time = time.perf_counter()
         all_results = {}
@@ -378,94 +400,146 @@ async def get_mrt_crowd_density(mrt_lines: List[str] = Query(..., description="L
         }
 
     except HTTPException as he:
+        emit_route_http_error(
+            "/mrt_crowd_density",
+            request,
+            he,
+            t0,
+            stage=stage,
+            mrt_lines=mrt_lines,
+            mrt_lines_count=len(mrt_lines),
+        )
         raise he
-    except Exception as e:
-        print(f"Unexpected error: {e}")
+    except Exception as exc:
+        print(f"Unexpected error: {exc}")
+        emit_route_exception(
+            "/mrt_crowd_density",
+            request,
+            exc,
+            t0,
+            stage=stage,
+            mrt_lines=mrt_lines,
+            mrt_lines_count=len(mrt_lines),
+        )
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @MRT_router.get("/extractRailMapData")
-async def extract_rail_map_data():
+async def extract_rail_map_data(request: Request):
+    t0 = time.perf_counter()
+    stage_state = {"value": "fetch_geojson"}
     try:
-        payloads = await _build_and_seed_all_rail_payloads()
+        payloads = await _build_and_seed_all_rail_payloads(lambda value: stage_state.__setitem__("value", value))
+        stage_state["value"] = "purge_cache"
+        blob_cache.delete(RAIL_LINES_ROUTE_KEY)
+        blob_cache.delete(RAIL_STATIONS_ROUTE_KEY)
+        blob_cache.delete(RAIL_STATION_EXITS_ROUTE_KEY)
+
+        return {
+            "message": "Rail map data refreshed",
+            "counts": {
+                "lines": len(payloads[RAIL_LINES_ROW_ID]["lines"]),
+                "stations": len(payloads[RAIL_STATIONS_ROW_ID]["stations"]),
+                "exits": len(payloads[RAIL_STATION_EXITS_ROW_ID]["exits"]),
+            },
+            "supabase_ids": [RAIL_LINES_ROW_ID, RAIL_STATIONS_ROW_ID, RAIL_STATION_EXITS_ROW_ID],
+        }
     except HTTPException as exc:
+        emit_route_http_error("/extractRailMapData", request, exc, t0, stage=stage_state["value"])
         raise exc
     except Exception as exc:
         print(f"Error processing rail map data: {exc}")
+        emit_route_exception("/extractRailMapData", request, exc, t0, stage=stage_state["value"])
         raise HTTPException(status_code=500, detail=f"Error processing rail map data: {exc}") from exc
-
-    blob_cache.delete(RAIL_LINES_ROUTE_KEY)
-    blob_cache.delete(RAIL_STATIONS_ROUTE_KEY)
-    blob_cache.delete(RAIL_STATION_EXITS_ROUTE_KEY)
-
-    return {
-        "message": "Rail map data refreshed",
-        "counts": {
-            "lines": len(payloads[RAIL_LINES_ROW_ID]["lines"]),
-            "stations": len(payloads[RAIL_STATIONS_ROW_ID]["stations"]),
-            "exits": len(payloads[RAIL_STATION_EXITS_ROW_ID]["exits"]),
-        },
-        "supabase_ids": [RAIL_LINES_ROW_ID, RAIL_STATIONS_ROW_ID, RAIL_STATION_EXITS_ROW_ID],
-    }
 
 
 @MRT_router.get("/getRailLinesData")
 async def get_rail_lines_data(request: Request):
+    t0 = time.perf_counter()
+    stage_state = {"value": "load_json_row"}
     try:
         return await blob_cache.get_cached_or_generate(
             request=request,
             route_key=RAIL_LINES_ROUTE_KEY,
             ttl_seconds=ROUTE_CACHE_TTLS[RAIL_LINES_ROUTE_KEY],
-            generator=lambda: _load_json_row_or_seed(RAIL_LINES_ROW_ID, _build_and_seed_all_rail_payloads),
+            generator=lambda: _load_json_row_or_seed(
+                RAIL_LINES_ROW_ID,
+                _build_and_seed_all_rail_payloads,
+                lambda value: stage_state.__setitem__("value", value),
+            ),
         )
     except HTTPException as exc:
+        emit_route_http_error("/getRailLinesData", request, exc, t0, stage=stage_state["value"])
         raise exc
     except Exception as exc:
         print(f"Error fetching rail lines data: {exc}")
+        emit_route_exception("/getRailLinesData", request, exc, t0, stage=stage_state["value"])
         raise HTTPException(status_code=500, detail="Error fetching rail lines data") from exc
 
 
 @MRT_router.get("/getRailStationsData")
 async def get_rail_stations_data(request: Request):
+    t0 = time.perf_counter()
+    stage_state = {"value": "load_json_row"}
     try:
         return await blob_cache.get_cached_or_generate(
             request=request,
             route_key=RAIL_STATIONS_ROUTE_KEY,
             ttl_seconds=ROUTE_CACHE_TTLS[RAIL_STATIONS_ROUTE_KEY],
-            generator=lambda: _load_json_row_or_seed(RAIL_STATIONS_ROW_ID, _build_and_seed_all_rail_payloads),
+            generator=lambda: _load_json_row_or_seed(
+                RAIL_STATIONS_ROW_ID,
+                _build_and_seed_all_rail_payloads,
+                lambda value: stage_state.__setitem__("value", value),
+            ),
         )
     except HTTPException as exc:
+        emit_route_http_error("/getRailStationsData", request, exc, t0, stage=stage_state["value"])
         raise exc
     except Exception as exc:
         print(f"Error fetching rail stations data: {exc}")
+        emit_route_exception("/getRailStationsData", request, exc, t0, stage=stage_state["value"])
         raise HTTPException(status_code=500, detail="Error fetching rail stations data") from exc
 
 
 @MRT_router.get("/getRailStationExitsData")
 async def get_rail_station_exits_data(request: Request):
+    t0 = time.perf_counter()
+    stage_state = {"value": "load_json_row"}
     try:
         return await blob_cache.get_cached_or_generate(
             request=request,
             route_key=RAIL_STATION_EXITS_ROUTE_KEY,
             ttl_seconds=ROUTE_CACHE_TTLS[RAIL_STATION_EXITS_ROUTE_KEY],
-            generator=lambda: _load_json_row_or_seed(RAIL_STATION_EXITS_ROW_ID, _build_and_seed_all_rail_payloads),
+            generator=lambda: _load_json_row_or_seed(
+                RAIL_STATION_EXITS_ROW_ID,
+                _build_and_seed_all_rail_payloads,
+                lambda value: stage_state.__setitem__("value", value),
+            ),
         )
     except HTTPException as exc:
+        emit_route_http_error("/getRailStationExitsData", request, exc, t0, stage=stage_state["value"])
         raise exc
     except Exception as exc:
         print(f"Error fetching rail station exits data: {exc}")
+        emit_route_exception("/getRailStationExitsData", request, exc, t0, stage=stage_state["value"])
         raise HTTPException(status_code=500, detail="Error fetching rail station exits data") from exc
 
 
 @MRT_router.get("/getMRTStationCoords")
-async def get_stationCoord_data():
+async def get_stationCoord_data(request: Request):
     key = "stationCoords"
+    t0 = time.perf_counter()
+    stage = "load_station_coords"
     try:
         response = dbClient.table("jsons").select("json_value").eq("id", key).execute()
         if response.data:
             return response.data[0]["json_value"]
         else:
             return {"message": "No records available"}
-    except Exception as e:
-        print(f"Error fetching mrt Station Coordinates data: {e}")
+    except HTTPException as exc:
+        emit_route_http_error("/getMRTStationCoords", request, exc, t0, stage=stage)
+        raise
+    except Exception as exc:
+        print(f"Error fetching mrt Station Coordinates data: {exc}")
+        emit_route_exception("/getMRTStationCoords", request, exc, t0, stage=stage)
         raise HTTPException(status_code=500, detail="Error fetching mrt Station Coordinates data")

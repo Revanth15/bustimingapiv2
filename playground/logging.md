@@ -56,3 +56,31 @@ Slow /bustiming requests over 1 second:
 | unpack_logfmt from _msg
 | filter route:="/bustiming" AND total_ms:> 1000
 
+All structured route failures:
+
+| unpack_logfmt from _msg
+| filter event:="http_error" OR event:="unhandled_error"
+
+Count failures by route:
+
+| unpack_logfmt from _msg
+| filter event:="http_error" OR event:="unhandled_error"
+| stats by (route, event) count() as logs
+
+Count failures by route and stage:
+
+| unpack_logfmt from _msg
+| filter event:="http_error" OR event:="unhandled_error"
+| stats by (route, stage, event) count() as logs
+
+Unhandled exceptions by route and exception type:
+
+| unpack_logfmt from _msg
+| filter event:="unhandled_error"
+| stats by (route, exception_type, stage) count() as logs
+
+HTTP errors by route and status code:
+
+| unpack_logfmt from _msg
+| filter event:="http_error"
+| stats by (route, status_code, stage) count() as logs

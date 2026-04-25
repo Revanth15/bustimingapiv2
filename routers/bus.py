@@ -1,5 +1,6 @@
 from datetime import datetime
 import json
+import time
 from typing import List, Optional
 import uuid
 from fastapi import APIRouter, HTTPException, Request
@@ -8,7 +9,16 @@ import httpx
 from pydantic import BaseModel
 import pytz
 from routers.database import getDBClient
-from routers.utils import cache_headers, getBusRoutesFromLTA, getBusServicesFromLTA ,getFormattedBusRoutesData, map_bus_services, restructure_to_stops_only
+from routers.utils import (
+    cache_headers,
+    emit_route_exception,
+    emit_route_http_error,
+    getBusRoutesFromLTA,
+    getBusServicesFromLTA,
+    getFormattedBusRoutesData,
+    map_bus_services,
+    restructure_to_stops_only,
+)
 from routers.cache import ROUTE_CACHE_TTLS, blob_cache
 
 dbClient = getDBClient()
@@ -35,10 +45,13 @@ async def health_check(request: Request):
     return {"status": "API is running"}
 
 @bus_router.get("/extractBusRoutesRawData")
-async def extract_bus_routes_raw_data():
+async def extract_bus_routes_raw_data(request: Request):
+    t0 = time.perf_counter()
+    stage = "fetch_lta_bus_routes"
     try:
         bus_route_key = "busRouteRaw"
         raw_data = await getBusRoutesFromLTA()
+        stage = "restructure_stops_only"
         stops_data = restructure_to_stops_only(raw_data)
 
         sgt_timezone = pytz.timezone("Asia/Singapore")
@@ -55,6 +68,7 @@ async def extract_bus_routes_raw_data():
         ]
 
         # Upsert data into the bus_route_raw table
+        stage = "upsert_bus_route_raw"
         response = dbClient.table("bus_route_raw").upsert(
             formatted_data,
             on_conflict="id"  # Update if id already exists
@@ -66,15 +80,21 @@ async def extract_bus_routes_raw_data():
 
         return {"message": "Extracted and stored successfully"}
 
-    except Exception as e:
-        print(f"Error processing bus routes data: {e}")
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    except HTTPException as exc:
+        emit_route_http_error("/extractBusRoutesRawData", request, exc, t0, stage=stage)
+        raise
+    except Exception as exc:
+        print(f"Error processing bus routes data: {exc}")
+        emit_route_exception("/extractBusRoutesRawData", request, exc, t0, stage=stage)
+        raise HTTPException(status_code=500, detail=f"Error: {str(exc)}")
 
 @bus_router.get("/bus-routes/stops")
 async def get_bus_routes_by_stops(request: Request):
     """
     Get bus routes data organized by bus stops only.
     """
+    t0 = time.perf_counter()
+    stage = "load_bus_route_raw"
     try:
         async def build_payload():
             response = dbClient.table("bus_route_raw").select("bus_stop_code, json_value").execute()
@@ -94,12 +114,16 @@ async def get_bus_routes_by_stops(request: Request):
             generator=build_payload,
         )
 
-    except Exception as e:
-        print(f"Error fetching bus route data: {e}")
+    except HTTPException as exc:
+        emit_route_http_error("/bus-routes/stops", request, exc, t0, stage=stage)
+        raise
+    except Exception as exc:
+        print(f"Error fetching bus route data: {exc}")
+        emit_route_exception("/bus-routes/stops", request, exc, t0, stage=stage)
         raise HTTPException(status_code=500, detail="Error fetching bus route data")
 
 @bus_router.get("/extractBusRoutesData")
-async def extract_bus_stops():
+async def extract_bus_stops(request: Request):
     """
     Extract bus routes data and upsert into Supabase if not already extracted.
     - Checks if bus_routes and jsons tables have data.
@@ -110,6 +134,9 @@ async def extract_bus_stops():
     """
     bus_route_key = "busRoute"
     bus_stop_available_services_key = "busStopAvailableServices"
+
+    t0 = time.perf_counter()
+    stage = "fetch_lta_bus_routes"
 
     try:
         # Check if data exists in bus_routes table
@@ -126,6 +153,7 @@ async def extract_bus_stops():
 
         # If either dataset is missing, extract and upsert
         raw_bus_route_data = await getBusRoutesFromLTA()
+        stage = "format_routes"
         formatted_bus_route_data, formatted_bus_stop_available_services = getFormattedBusRoutesData(raw_bus_route_data)
 
         # Get current timestamp in Singapore time (GMT+8)
@@ -173,6 +201,7 @@ async def extract_bus_stops():
         print(f"Prepared bus stop available services: {bus_stop_available_services_key}")
 
         # Upsert bus stop available services
+        stage = "upsert_jsons"
         response = dbClient.table("jsons").upsert(
             [formatted_bus_stop_services],
             on_conflict="id"
@@ -184,12 +213,18 @@ async def extract_bus_stops():
 
         return {"message": formatted_bus_route_data}
 
-    except Exception as e:
-        print(f"Error processing bus routes data: {e}")
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    except HTTPException as exc:
+        emit_route_http_error("/extractBusRoutesData", request, exc, t0, stage=stage)
+        raise
+    except Exception as exc:
+        print(f"Error processing bus routes data: {exc}")
+        emit_route_exception("/extractBusRoutesData", request, exc, t0, stage=stage)
+        raise HTTPException(status_code=500, detail=f"Error: {str(exc)}")
     
 @bus_router.get("/getBusRoutesData")
 async def get_bus_route_data(request: Request):
+    t0 = time.perf_counter()
+    stage = "load_bus_routes"
     try:
         async def build_payload():
             response = dbClient.table("bus_route").select("service_no, json_value").execute()
@@ -211,27 +246,39 @@ async def get_bus_route_data(request: Request):
             ttl_seconds=ROUTE_CACHE_TTLS["/getBusRoutesData"],
             generator=build_payload,
         )
-    except Exception as e:
-        print(f"Error fetching bus route data: {e}")
+    except HTTPException as exc:
+        emit_route_http_error("/getBusRoutesData", request, exc, t0, stage=stage)
+        raise
+    except Exception as exc:
+        print(f"Error fetching bus route data: {exc}")
+        emit_route_exception("/getBusRoutesData", request, exc, t0, stage=stage)
         raise HTTPException(status_code=500, detail="Error fetching bus route data")
     
 @bus_router.get("/getBusStopAvailableBussesData")
-async def get_bus_stop_available_busses_data():
+async def get_bus_stop_available_busses_data(request: Request):
     key = "busStopAvailableServices"
+    t0 = time.perf_counter()
+    stage = "load_bus_stop_services"
     try:
         response = dbClient.table("jsons").select("json_value").eq("id", key).execute()
         if response.data:
             return response.data[0]["json_value"]
         else:
             return {"message": "No records available"}
-    except Exception as e:
-        print(f"Error fetching bus stop available busses data: {e}")
+    except HTTPException as exc:
+        emit_route_http_error("/getBusStopAvailableBussesData", request, exc, t0, stage=stage)
+        raise
+    except Exception as exc:
+        print(f"Error fetching bus stop available busses data: {exc}")
+        emit_route_exception("/getBusStopAvailableBussesData", request, exc, t0, stage=stage)
         raise HTTPException(status_code=500, detail="Error fetching bus stop available busses data")
     
 @bus_router.get("/getBusServicesData")
-async def get_bus_services_data(overwrite: Optional[bool] = False):
+async def get_bus_services_data(request: Request, overwrite: Optional[bool] = False):
     print(overwrite)
     pbKey = "busServices"
+    t0 = time.perf_counter()
+    stage = "load_bus_services"
 
     sgt_timezone = pytz.timezone("Asia/Singapore")
     current_timestamp = datetime.now(sgt_timezone).isoformat()
@@ -247,9 +294,11 @@ async def get_bus_services_data(overwrite: Optional[bool] = False):
                 # return db_data.__dict__["json_value"]
             else:
                 # If no data in DB, fetch from API, map, and save.
+                stage = "fetch_lta_bus_services"
                 busServices = await getBusServicesFromLTA()
                 if not busServices:
                     return []
+                stage = "map_bus_services"
                 camelcased_bus_services = map_bus_services(busServices)
                 formatted_bus_stop_services = {
                     "id": pbKey,
@@ -258,6 +307,7 @@ async def get_bus_services_data(overwrite: Optional[bool] = False):
                 }
 
                 # Upsert bus stop available services
+                stage = "upsert_jsons"
                 response = dbClient.table("jsons").upsert(
                     [formatted_bus_stop_services],
                     on_conflict="id"
@@ -266,9 +316,11 @@ async def get_bus_services_data(overwrite: Optional[bool] = False):
 
         else:
             # Overwrite or fetch, map, and save to DB
+            stage = "fetch_lta_bus_services"
             busServices = await getBusServicesFromLTA()
             if not busServices:
                 return []
+            stage = "map_bus_services"
             camelcased_bus_services = map_bus_services(busServices)
             formatted_bus_stop_services = {
                 "id": pbKey,
@@ -277,6 +329,7 @@ async def get_bus_services_data(overwrite: Optional[bool] = False):
             }
 
             # Upsert bus stop available services
+            stage = "upsert_jsons"
             response = dbClient.table("jsons").upsert(
                 [formatted_bus_stop_services],
                 on_conflict="id"
@@ -284,10 +337,26 @@ async def get_bus_services_data(overwrite: Optional[bool] = False):
             return camelcased_bus_services
 
     except HTTPException as http_exc:
+        emit_route_http_error(
+            "/getBusServicesData",
+            request,
+            http_exc,
+            t0,
+            stage=stage,
+            overwrite=overwrite,
+        )
         raise http_exc
-    except Exception as e:
-        print(f"Error retrieving bus services: {e}")
-        raise HTTPException(status_code=500, detail=f"Error retrieving bus services: {e}")
+    except Exception as exc:
+        print(f"Error retrieving bus services: {exc}")
+        emit_route_exception(
+            "/getBusServicesData",
+            request,
+            exc,
+            t0,
+            stage=stage,
+            overwrite=overwrite,
+        )
+        raise HTTPException(status_code=500, detail=f"Error retrieving bus services: {exc}")
     
 
 class BusRoute(BaseModel):
@@ -298,7 +367,7 @@ class BusRouteBulkUpdate(BaseModel):
     bus_routes: List[BusRoute]
 
 @bus_router.post("/bulkUpdateBusRoutes")
-async def bulk_update_bus_routes(data: BusRouteBulkUpdate):
+async def bulk_update_bus_routes(request: Request, data: BusRouteBulkUpdate):
     """
     Bulk update bus routes data in Supabase.
     - Accepts a list of bus route objects with updated polyline values.
@@ -306,6 +375,9 @@ async def bulk_update_bus_routes(data: BusRouteBulkUpdate):
     - Updates json_value and modified_at (SGT) for existing rows.
     - Inserts new rows with new UUIDs for id.
     """
+    t0 = time.perf_counter()
+    stage = "format_routes"
+
     try:
         sgt_timezone = pytz.timezone("Asia/Singapore")
         current_timestamp = datetime.now(sgt_timezone).isoformat()
@@ -324,6 +396,7 @@ async def bulk_update_bus_routes(data: BusRouteBulkUpdate):
 
         batch_size = 1000
         for i in range(0, len(formatted_bus_routes), batch_size):
+            stage = "upsert_bus_route_batch"
             batch = formatted_bus_routes[i:i + batch_size]
             response = dbClient.table("bus_route").upsert(
                 batch,
@@ -340,76 +413,147 @@ async def bulk_update_bus_routes(data: BusRouteBulkUpdate):
 
         return {"message": "Bulk update successful"}
 
-    except Exception as e:
-        print(f"Error processing bulk update: {e}")
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    except HTTPException as exc:
+        emit_route_http_error(
+            "/bulkUpdateBusRoutes",
+            request,
+            exc,
+            t0,
+            stage=stage,
+            service_numbers=[route.serviceNo for route in data.bus_routes],
+            service_numbers_count=len(data.bus_routes),
+        )
+        raise
+    except Exception as exc:
+        print(f"Error processing bulk update: {exc}")
+        emit_route_exception(
+            "/bulkUpdateBusRoutes",
+            request,
+            exc,
+            t0,
+            stage=stage,
+            service_numbers=[route.serviceNo for route in data.bus_routes],
+            service_numbers_count=len(data.bus_routes),
+        )
+        raise HTTPException(status_code=500, detail=f"Error: {str(exc)}")
 
 @bus_router.post("/bus-routes/polylines")
-async def get_bus_routes_with_polylines(request: PolylineRequest):
-    # 1. Fetch GeoJSON and build O(1) lookup: {"serviceNo|direction": [[lat, lng], ...]}
-    async with httpx.AsyncClient() as client:
-        geojson_res = await client.get(GEOJSON_URL)
-        if geojson_res.status_code != 200:
-            raise HTTPException(status_code=502, detail="Failed to fetch GeoJSON source")
-        geojson = geojson_res.json()
+async def get_bus_routes_with_polylines(request: Request, body: PolylineRequest):
+    t0 = time.perf_counter()
+    stage = "fetch_geojson"
+    try:
+        # 1. Fetch GeoJSON and build O(1) lookup: {"serviceNo|direction": [[lat, lng], ...]}
+        async with httpx.AsyncClient() as client:
+            geojson_res = await client.get(GEOJSON_URL)
+            if geojson_res.status_code != 200:
+                raise HTTPException(status_code=502, detail="Failed to fetch GeoJSON source")
+            geojson = geojson_res.json()
 
-    lookup: dict[str, list[list[float]]] = {}
-    for feature in geojson.get("features", []):
-        props = feature.get("properties", {})
-        service_no = str(props.get("number", ""))
-        pattern = props.get("pattern")
-        direction = {0: "1", 1: "2"}.get(pattern)
-        if direction is None:
-            continue
-        coords = feature.get("geometry", {}).get("coordinates", [])
-        if not coords:
-            continue
-        # Swap [lng, lat] → [lat, lng]
-        transformed = [[lat, lng] for lng, lat in coords]
-        key = f"{service_no}|{direction}"
-        if key in lookup:
-            lookup[key].extend(transformed)  # concatenate multiple features
-        else:
-            lookup[key] = transformed
+        lookup: dict[str, list[list[float]]] = {}
+        for feature in geojson.get("features", []):
+            props = feature.get("properties", {})
+            service_no = str(props.get("number", ""))
+            pattern = props.get("pattern")
+            direction = {0: "1", 1: "2"}.get(pattern)
+            if direction is None:
+                continue
+            coords = feature.get("geometry", {}).get("coordinates", [])
+            if not coords:
+                continue
+            transformed = [[lat, lng] for lng, lat in coords]
+            key = f"{service_no}|{direction}"
+            if key in lookup:
+                lookup[key].extend(transformed)
+            else:
+                lookup[key] = transformed
 
-    # 2. Fetch and format LTA data
-    raw_bus_route_data = await getBusRoutesFromLTA()
-    formatted_bus_route_data, _ = getFormattedBusRoutesData(raw_bus_route_data)
+        stage = "fetch_lta_bus_routes"
+        raw_bus_route_data = await getBusRoutesFromLTA()
+        stage = "format_routes"
+        formatted_bus_route_data, _ = getFormattedBusRoutesData(raw_bus_route_data)
 
-    # 3. Filter to requested services and inject polylines
-    requested = set(request.serviceNumbers)
-    result = []
-    for svc in formatted_bus_route_data:
-        if svc["serviceNo"] not in requested:
-            continue
-        routes = []
-        for route in svc["routes"]:
-            key = f"{svc['serviceNo']}|{route['direction']}"
-            coords = lookup.get(key)
-            polyline = json.dumps(coords, separators=(",", ":")) if coords else ""
-            routes.append({**route, "polyline": polyline})
-        result.append({**svc, "routes": routes})
+        requested = set(body.serviceNumbers)
+        result = []
+        for svc in formatted_bus_route_data:
+            if svc["serviceNo"] not in requested:
+                continue
+            routes = []
+            for route in svc["routes"]:
+                key = f"{svc['serviceNo']}|{route['direction']}"
+                coords = lookup.get(key)
+                polyline = json.dumps(coords, separators=(",", ":")) if coords else ""
+                routes.append({**route, "polyline": polyline})
+            result.append({**svc, "routes": routes})
 
-    return {"bus_routes" : result}
+        return {"bus_routes" : result}
+    except HTTPException as exc:
+        emit_route_http_error(
+            "/bus-routes/polylines",
+            request,
+            exc,
+            t0,
+            stage=stage,
+            service_numbers=body.serviceNumbers,
+            service_numbers_count=len(body.serviceNumbers),
+        )
+        raise
+    except Exception as exc:
+        emit_route_exception(
+            "/bus-routes/polylines",
+            request,
+            exc,
+            t0,
+            stage=stage,
+            service_numbers=body.serviceNumbers,
+            service_numbers_count=len(body.serviceNumbers),
+        )
+        raise
 
 @bus_router.delete("bus-routes")
-async def delete_bus_routes(request: DeleteRequest):
-    if not request.serviceNumbers:
-        raise HTTPException(status_code=400, detail="`serviceNumbers` must be a non-empty list.")
+async def delete_bus_routes(request: Request, body: DeleteRequest):
+    t0 = time.perf_counter()
+    stage = "validate_payload"
 
-    response = (
-        dbClient.table("bus_route")
-        .delete()
-        .in_("service_no", request.serviceNumbers)
-        .execute()
-    )
+    try:
+        if not body.serviceNumbers:
+            raise HTTPException(status_code=400, detail="`serviceNumbers` must be a non-empty list.")
 
-    deleted = response.data or []
+        stage = "delete_bus_routes"
+        response = (
+            dbClient.table("bus_route")
+            .delete()
+            .in_("service_no", body.serviceNumbers)
+            .execute()
+        )
 
-    return {
-        "deleted": len(deleted),
-        "serviceNumbers": [row["service_no"] for row in deleted],
-    }
+        deleted = response.data or []
+
+        return {
+            "deleted": len(deleted),
+            "serviceNumbers": [row["service_no"] for row in deleted],
+        }
+    except HTTPException as exc:
+        emit_route_http_error(
+            "bus-routes",
+            request,
+            exc,
+            t0,
+            stage=stage,
+            service_numbers=body.serviceNumbers,
+            service_numbers_count=len(body.serviceNumbers),
+        )
+        raise
+    except Exception as exc:
+        emit_route_exception(
+            "bus-routes",
+            request,
+            exc,
+            t0,
+            stage=stage,
+            service_numbers=body.serviceNumbers,
+            service_numbers_count=len(body.serviceNumbers),
+        )
+        raise
 
 @bus_router.post("/cache/purge")
 async def purge_cache(key: str = None):
