@@ -2,7 +2,7 @@ from fastapi import FastAPI
 import psutil
 from routers.axiomMiddleware import AxiomLoggerMiddleware
 from routers.client import lifespan
-from routers.database import db_router as db_router 
+from routers.database import db_router as db_router, ensure_valid_session
 from routers.busstop import busStops_router as busStops_router 
 from routers.middleware import FirebaseLoggerMiddleware
 from routers.users import users_router as users_router 
@@ -54,6 +54,12 @@ app.add_middleware(
     ],
 )
 
+
+@app.middleware("http")
+async def refresh_supabase_session(request, call_next):
+    ensure_valid_session()
+    response = await call_next(request)
+    return response
 
 @app.get("/")
 async def root():

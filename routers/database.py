@@ -1,3 +1,6 @@
+import time
+import threading
+
 from fastapi import APIRouter
 from dotenv import load_dotenv
 from routers.utils import getEnvVariable
@@ -20,6 +23,40 @@ supabase.auth.sign_in_with_password(
         "password": SUPABASE_PASSWORD
     }
 )
+
+_refresh_lock = threading.Lock()
+
+def ensure_valid_session():
+    """Check if the Supabase JWT is still valid; re-authenticate if expired or about to expire."""
+    try:
+        session = supabase.auth.get_session()
+        # Refresh if no session or token expires within the next 60 seconds
+        if session is None or (session.expires_at and session.expires_at - time.time() < 60):
+            with _refresh_lock:
+                # Double-check after acquiring lock (another thread may have already refreshed)
+                session = supabase.auth.get_session()
+                if session is None or (session.expires_at and session.expires_at - time.time() < 60):
+                    print("Supabase JWT expired or about to expire, re-authenticating...")
+                    supabase.auth.sign_in_with_password(
+                        {
+                            "email": SUPABASE_EMAIL,
+                            "password": SUPABASE_PASSWORD
+                        }
+                    )
+                    print("Supabase re-authentication successful")
+    except Exception as e:
+        print(f"Session check failed, attempting re-authentication: {e}")
+        with _refresh_lock:
+            try:
+                supabase.auth.sign_in_with_password(
+                    {
+                        "email": SUPABASE_EMAIL,
+                        "password": SUPABASE_PASSWORD
+                    }
+                )
+                print("Supabase re-authentication successful (after error)")
+            except Exception as e2:
+                print(f"Supabase re-authentication failed: {e2}")
 
 def getDBClient():
     return supabase
