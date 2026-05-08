@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta, timezone
+import gzip
 import json
 import sys
 import time
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 import pytz
 from routers.busstop_cache import BusStopCache
 from routers.cache import ROUTE_CACHE_TTLS, blob_cache
@@ -62,6 +63,22 @@ SINGAPORE_TZ = timezone(timedelta(hours=8))
 
 def _log_bustiming_event(level: str, event: str, **context: Any) -> None:
     emit_structured_log(level, event, route="/bustiming", **context)
+
+
+def _build_bustiming_response(request: Request, payload: Any) -> Response:
+    body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    headers = {"Vary": "Accept-Encoding"}
+
+    if "gzip" in request.headers.get("accept-encoding", "").lower():
+        compressed = gzip.compress(body, compresslevel=6)
+        if len(compressed) < len(body):
+            return Response(
+                content=compressed,
+                media_type="application/json",
+                headers={**headers, "Content-Encoding": "gzip"},
+            )
+
+    return Response(content=body, media_type="application/json", headers=headers)
 
 @busStops_router.get("/extractBusStops")
 async def extract_bus_stops(request: Request):
@@ -301,7 +318,7 @@ async def get_bus_timing(
                     empty_response=True,
                     user_agent=request.headers.get("User-Agent", "unknown"),
                 )
-                return []
+                return _build_bustiming_response(request, [])
 
             t_process_start = time.perf_counter()
             current_time = datetime.now(SINGAPORE_TZ)
@@ -336,7 +353,7 @@ async def get_bus_timing(
                 user_agent=request.headers.get("User-Agent", "unknown"),
             )
 
-            return valid
+            return _build_bustiming_response(request, valid)
 
         except HTTPException as exc:
             _log_bustiming_event(
