@@ -142,7 +142,8 @@ def _build_station_index(features: list[dict[str, Any]]) -> dict[str, dict[str, 
     station_index: dict[str, dict[str, Any]] = {}
 
     for feature in features:
-        geometry_type = feature.get("geometry", {}).get("type")
+        geometry = feature.get("geometry", {})
+        geometry_type = geometry.get("type")
         properties = feature.get("properties", {})
 
         if geometry_type != "Point" or properties.get("stop_type") != "station":
@@ -153,6 +154,8 @@ def _build_station_index(features: list[dict[str, Any]]) -> dict[str, dict[str, 
         station_colors_raw = properties.get("station_colors", "")
         line_colors_hex = [_normalize_color(token) for token in station_colors_raw.split("-") if token]
 
+        latitude, longitude = _to_lat_lng_pair(geometry.get("coordinates", []))
+
         station_index[station_codes_raw] = {
             "id": station_codes_raw.lower(),
             "name": properties.get("name", ""),
@@ -160,6 +163,8 @@ def _build_station_index(features: list[dict[str, Any]]) -> dict[str, dict[str, 
             "primary_station_code": station_codes[0],
             "networks": _normalize_network(properties.get("network", "")),
             "line_colors_hex": line_colors_hex,
+            "latitude": latitude,
+            "longitude": longitude,
         }
 
     if not station_index:
