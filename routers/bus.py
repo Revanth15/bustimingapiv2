@@ -509,7 +509,7 @@ async def get_bus_routes_with_polylines(request: Request, body: PolylineRequest)
         )
         raise
 
-@bus_router.delete("bus-routes")
+@bus_router.delete("/bus-routes")
 async def delete_bus_routes(request: Request, body: DeleteRequest):
     t0 = time.perf_counter()
     stage = "validate_payload"
