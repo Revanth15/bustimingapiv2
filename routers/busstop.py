@@ -283,7 +283,8 @@ async def get_bus_timing(
                     key=busstopcode,
                     fetch_fn=lambda: queryAPI(
                         "ltaodataservice/v3/BusArrival",
-                        {"BusStopCode": busstopcode}
+                        {"BusStopCode": busstopcode},
+                        empty_on_error=True,
                     )
                 )
             except HTTPException:
@@ -299,7 +300,8 @@ async def get_bus_timing(
                 )
                 response = await queryAPI(
                     "ltaodataservice/v3/BusArrival",
-                    {"BusStopCode": busstopcode}
+                    {"BusStopCode": busstopcode},
+                    empty_on_error=True,
                 )
 
             t_api_end = time.perf_counter()

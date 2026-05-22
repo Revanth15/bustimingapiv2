@@ -367,7 +367,11 @@ async def get_mrt_crowd_density(
         all_results = {}
 
         for mrt_line in mrt_lines:
-            ltaResponse = await queryAPI("ltaodataservice/PCDRealTime", {"TrainLine": mrt_line})
+            ltaResponse = await queryAPI(
+                "ltaodataservice/PCDRealTime",
+                {"TrainLine": mrt_line},
+                empty_on_error=True,
+            )
             mrtCrowdDensityRes = ltaResponse.get("value", [])
 
             if not mrtCrowdDensityRes:

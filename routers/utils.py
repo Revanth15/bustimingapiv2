@@ -215,8 +215,14 @@ def redact_coordinates(
     }
 
 
+def _empty_lta_response(path: str) -> dict:
+    if "BusArrival" in path:
+        return {"Services": []}
+    return {"value": []}
+
+
 # Query LTA's API
-async def queryAPI(path: str, params: dict) -> dict:
+async def queryAPI(path: str, params: dict, empty_on_error: bool = False) -> dict:
     url = f"https://datamall2.mytransport.sg/{path}"
     client = get_client()
     max_attempts = 3
@@ -242,6 +248,8 @@ async def queryAPI(path: str, params: dict) -> dict:
                 elapsed_ms=elapsed_ms,
                 response_text=exc.response.text[:500],
             )
+            if empty_on_error:
+                return _empty_lta_response(path)
             raise HTTPException(503, "Error contacting LTA API") from exc
         except httpx.RequestError as exc:
             elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
@@ -265,6 +273,8 @@ async def queryAPI(path: str, params: dict) -> dict:
             if will_retry:
                 await asyncio.sleep(0.25 * attempt)
                 continue
+            if empty_on_error:
+                return _empty_lta_response(path)
             raise HTTPException(503, "Error contacting LTA API") from exc
         except Exception as exc:
             elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
@@ -280,6 +290,8 @@ async def queryAPI(path: str, params: dict) -> dict:
                 max_attempts=max_attempts,
                 elapsed_ms=elapsed_ms,
             )
+            if empty_on_error:
+                return _empty_lta_response(path)
             raise HTTPException(500, "Internal error during API query") from exc
 
 def timeDifferenceToNowSg(target_time_str: str, current_time_sg: datetime) -> int:
@@ -370,7 +382,7 @@ async def getBusServicesFromLTA():
 
     return flattened_list
 
-async def getCarParkAvailabilityFromLTA():
+async def getCarParkAvailabilityFromLTA(empty_on_error: bool = False):
     results = []
     counter = 0
     flatten = lambda l: [y for x in l for y in x]
@@ -378,7 +390,13 @@ async def getCarParkAvailabilityFromLTA():
 
     while True:
         print(f"Counter value: {counter}")
-        result = await queryAPI("ltaodataservice/CarParkAvailabilityv2", {"$skip": str(counter)})
+        result = await queryAPI(
+            "ltaodataservice/CarParkAvailabilityv2",
+            {"$skip": str(counter)},
+            empty_on_error=empty_on_error,
+        )
+        if empty_on_error and not result.get("value"):
+            break
         results.append(result)
         counter += 500
         if counter >= 4000:
@@ -388,7 +406,7 @@ async def getCarParkAvailabilityFromLTA():
 
     return flattened_list
 
-async def getAllEVChargingPointsFromLTA():
+async def getAllEVChargingPointsFromLTA(empty_on_error: bool = False):
     """
     Fetches ALL EV charging points data from LTA API in a single batch file.
     Uses httpx (modern async HTTP library).
@@ -397,27 +415,38 @@ async def getAllEVChargingPointsFromLTA():
         list: List of all EV charging points in Singapore
     """
     # Step 1: Get the batch file link from the API
-    batch_response = await queryAPI("ltaodataservice/EVCBatch", {})
+    empty_ev_response = {"evLocationsData": []}
+    batch_response = await queryAPI(
+        "ltaodataservice/EVCBatch",
+        {},
+        empty_on_error=empty_on_error,
+    )
     
     # Step 2: Extract the download link from the response
     if batch_response and "value" in batch_response and len(batch_response["value"]) > 0:
         download_link = batch_response["value"][0]["Link"]
         
         # Step 3: Download the actual data from the link using httpx
-        async with httpx.AsyncClient() as client:
-            response = await client.get(download_link)
-            
-            if response.status_code == 200:
-                ev_data = response.json()
-                return ev_data
-            else:
-                print(f"Error downloading batch file: {response.status_code}")
-                return None
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(download_link)
+                
+                if response.status_code == 200:
+                    ev_data = response.json()
+                    return ev_data
+                else:
+                    print(f"Error downloading batch file: {response.status_code}")
+                    return empty_ev_response if empty_on_error else None
+        except Exception as exc:
+            print(f"Error downloading batch file: {exc}")
+            if empty_on_error:
+                return empty_ev_response
+            raise
     else:
         print("No batch file link found in response")
-        return None
+        return empty_ev_response if empty_on_error else None
 
-async def getTrafficIncidentsFromLTA():
+async def getTrafficIncidentsFromLTA(empty_on_error: bool = False):
     results = []
     counter = 0
     flatten = lambda l: [y for x in l for y in x]
@@ -425,7 +454,13 @@ async def getTrafficIncidentsFromLTA():
 
     while True:
         print(f"Counter value: {counter}")
-        result = await queryAPI("ltaodataservice/TrafficIncidents", {"$skip": str(counter)})
+        result = await queryAPI(
+            "ltaodataservice/TrafficIncidents",
+            {"$skip": str(counter)},
+            empty_on_error=empty_on_error,
+        )
+        if empty_on_error and not result.get("value"):
+            break
         results.append(result)
         counter += 500
         if counter >= 1000:
@@ -435,14 +470,18 @@ async def getTrafficIncidentsFromLTA():
 
     return flattened_list
 
-async def getVMSFromLTA():
+async def getVMSFromLTA(empty_on_error: bool = False):
     results = []
     counter = 0
     flatten = lambda l: [y for x in l for y in x]
     print("Starting to fetch VMS data...")
     while True:
         print(f"Counter value: {counter}")
-        result = await queryAPI("ltaodataservice/VMS", {"$skip": str(counter)})
+        result = await queryAPI(
+            "ltaodataservice/VMS",
+            {"$skip": str(counter)},
+            empty_on_error=empty_on_error,
+        )
         if not result.get("value"):  
             break
         results.append(result)

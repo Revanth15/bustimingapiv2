@@ -116,7 +116,11 @@ async def get_traffic_images(request: Request):
     t0 = time.perf_counter()
     stage = "fetch_upstream"
     try:
-        ltaResponse = await queryAPI("ltaodataservice/Traffic-Imagesv2", {})
+        ltaResponse = await queryAPI(
+            "ltaodataservice/Traffic-Imagesv2",
+            {},
+            empty_on_error=True,
+        )
         images = ltaResponse.get("value", [])
         if not images:
              return []
@@ -165,7 +169,7 @@ async def get_parking_availability(request: Request):
     t0 = time.perf_counter()
     stage = "fetch_upstream"
     try:
-        car_parks = await getCarParkAvailabilityFromLTA()
+        car_parks = await getCarParkAvailabilityFromLTA(empty_on_error=True)
         if not car_parks:
             return []
 
@@ -249,8 +253,8 @@ async def traffic_incidents(request: Request):
     t0 = time.perf_counter()
     stage = "fetch_upstream"
     try:
-        traffic_incidents = await getTrafficIncidentsFromLTA()
-        vms = await getVMSFromLTA()
+        traffic_incidents = await getTrafficIncidentsFromLTA(empty_on_error=True)
+        vms = await getVMSFromLTA(empty_on_error=True)
 
         all_incidents = traffic_incidents + vms
 
@@ -280,7 +284,7 @@ async def ev_charging(request: Request):
     t0 = time.perf_counter()
     stage = "fetch_upstream"
     try:
-        ev_charging = await getAllEVChargingPointsFromLTA()
+        ev_charging = await getAllEVChargingPointsFromLTA(empty_on_error=True)
 
         stage = "process_response"
         compressed_data = compress_to_gzip(ev_charging["evLocationsData"])
