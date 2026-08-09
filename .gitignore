@@ -16,3 +16,4 @@ stations.csv
 performanceTest.js
 tests/*
 !tests/test_lta_empty_fallback.py
+!tests/test_nus_nextbus.py

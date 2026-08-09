@@ -77,14 +77,14 @@ Fields:
 
 ### `GET /bustiming`
 
-Purpose: returns live arrival timings for selected bus services at a bus stop using LTA's `BusArrival` API.
+Purpose: returns live arrival timings for selected bus services at a bus stop. Numeric 5-digit stops use LTA's `BusArrival` API. Known NUS shuttle stop IDs use the public rendered NUS NextBus site and are returned in the same response shape.
 
 Query params:
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `busstopcode` | string | yes | 5-digit bus stop code. Validated with `^\d{5}$`. |
-| `busservicenos` | string | yes | Comma-separated services, for example `14,196`. Use `all` to return all services at the stop. |
+| `busstopcode` | string | yes | LTA 5-digit bus stop code, for example `40081`, or a known NUS stop ID, for example `COM3` or `KR-MRT`. |
+| `busservicenos` | string | yes | Comma-separated services, for example `14,196` or `D1,D2`. Use `all` to return all services at the stop. |
 | `userID` | string | no | Optional user identifier. Currently only accepted, not used in processing. |
 
 Response headers:
@@ -120,11 +120,14 @@ Notes:
 - `busArrivalTime` is minutes from current Singapore time.
 - Missing/invalid arrivals use `busArrivalTime: -100`, `busLoad: "-"`, `busFeature: "-"`, `busType: "-"`, coordinates `"-"`, and `busMonitored: 0`.
 - Services are sorted naturally, for example `2`, `14`, `14A`, `196`.
+- NUS stop responses include NUS shuttle routes only. Public buses shown on the NUS website, such as `PUB:95`, are intentionally excluded and should continue to use LTA numeric stop codes.
+- NUS arrivals expose up to 2 timings; the third `serviceDetails` entry is the standard missing-arrival placeholder.
 
 Common errors:
 
 - `400`: no bus services specified.
 - `422`: invalid or missing query params.
+- `422`: non-LTA stop code that is not a known NUS stop.
 - `500`: service unavailable due to unexpected processing error.
 - `503`: LTA API request failed.
 
@@ -215,6 +218,38 @@ Notes:
 
 - The current code prepares `bus_route` rows but does not upsert them because the Supabase upsert block is commented out.
 - It does upsert `busStopAvailableServices` into the `jsons` table.
+- Existing non-LTA stop IDs in `busStopAvailableServices`, including NUS stop IDs loaded by `POST /extractNusBusData`, are preserved when this endpoint refreshes LTA services.
+
+### `POST /extractNusBusData`
+
+Purpose: administrative data setup endpoint. Fetches NUS stop and route metadata from the public `nus-nextbus-web` static data files, formats it into the current Supabase-backed bus stop and route shapes, and merges NUS stop services into `jsons.busStopAvailableServices`.
+
+Query params: none.
+
+Stored data:
+
+- Upserts NUS stops into `bus_stops` with IDs such as `COM3` and `KR-MRT`.
+- Upserts NUS routes into `bus_route` with service numbers such as `D1`, `D2`, `A1`, and `K`.
+- Upserts NUS stop-centric route metadata into `bus_route_raw`.
+- Stores source static data in `jsons` with id `nusBusStatic` for runtime NUS stop detection.
+- Purges `/getallbusstops`, `/getBusRoutesData`, and `/bus-routes/stops` blob caches.
+
+Response:
+
+```json
+{
+  "message": "NUS bus data processed successfully",
+  "stops": 33,
+  "routes": 8,
+  "rawRouteStops": 33,
+  "updatedBusStopAvailableServices": true
+}
+```
+
+Common errors:
+
+- `500`: failed Supabase upsert or unexpected processing error.
+- `503`: upstream static data fetch failed.
 
 ### `GET /extractBusRoutesRawData`
 
@@ -1081,6 +1116,7 @@ These endpoints depend on environment variables loaded through `.env` or the dep
 | `GET` | `/getallbusstops` | `routers/busstop.py` |
 | `GET` | `/extractBusStops` | `routers/busstop.py` |
 | `GET` | `/extractBusRoutesData` | `routers/bus.py` |
+| `POST` | `/extractNusBusData` | `routers/bus.py` |
 | `GET` | `/extractBusRoutesRawData` | `routers/bus.py` |
 | `GET` | `/bus-routes/stops` | `routers/bus.py` |
 | `GET` | `/getBusRoutesData` | `routers/bus.py` |

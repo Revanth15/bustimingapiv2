@@ -12,7 +12,7 @@ def readJsonFile(file_path):
             for r in data:
                 extracted_list_bus_serviceno.append(r["serviceNo"])
 
-            print(extracted_list_bus_serviceno)
+            # print(extracted_list_bus_serviceno)
             print(len(extracted_list_bus_serviceno))
             return extracted_list_bus_serviceno
     except FileNotFoundError:
@@ -68,6 +68,9 @@ print(d)
 # 1. Update bus_data_latest.json using /extractBusRoutesData
 # 2. Update bus_data_outdated.json using /getBusRoutesData
 # 3. Run this script
+
+# cd scripts
+# python3 find_difference_route_data.py 
 
 
 # ------------------------------------------------------------

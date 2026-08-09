@@ -8,6 +8,11 @@ import pytz
 from routers.busstop_cache import BusStopCache
 from routers.cache import ROUTE_CACHE_TTLS, blob_cache
 from routers.database import getDBClient
+from routers.nus_nextbus import (
+    fetch_nus_timings,
+    is_lta_stop_code,
+    is_nus_stop_code,
+)
 from routers.utils import (
     emit_exception_log,
     emit_route_exception,
@@ -262,13 +267,14 @@ async def get_all_bus_stops(request: Request):
 @busStops_router.get("/bustiming")
 async def get_bus_timing(
     request: Request,
-    busstopcode: str = Query(..., regex=r'^\d{5}$'),
+    busstopcode: str = Query(..., pattern=r'^[A-Za-z0-9-]+$'),
     busservicenos: str = Query(...),
     userID: Optional[str] = None,
     background_tasks: BackgroundTasks = None
 ):
     t0 = time.perf_counter()
-    requested = set(busservicenos.split(',')) - {''}
+    busstopcode = busstopcode.strip().upper()
+    requested = {service.strip() for service in busservicenos.split(',')} - {''}
     if not requested:
         raise HTTPException(400, "No bus services specified")
 
@@ -278,33 +284,79 @@ async def get_bus_timing(
         try:
             t_api_start = time.perf_counter()
 
-            try:
-                response = await _cache.get_or_fetch(
-                    key=busstopcode,
-                    fetch_fn=lambda: queryAPI(
+            is_nus_stop = False
+            if not is_lta_stop_code(busstopcode):
+                is_nus_stop = await is_nus_stop_code(busstopcode, dbClient)
+                if not is_nus_stop:
+                    raise HTTPException(422, "Invalid bus stop code")
+
+            if is_nus_stop:
+                services = await fetch_nus_timings(
+                    busstopcode,
+                    {service.upper() for service in requested},
+                    process_all,
+                    dbClient,
+                )
+                t_api_end = time.perf_counter()
+
+                if not services:
+                    total_time = time.perf_counter() - t0
+                    api_ms = round((t_api_end - t_api_start) * 1000, 2)
+                    _log_bustiming_event(
+                        "info",
+                        "empty_response",
+                        bus_stop=busstopcode,
+                        source="nus_nextbus",
+                        total_ms=round(total_time * 1000, 2),
+                        api_ms=api_ms,
+                        empty_response=True,
+                        user_agent=request.headers.get("User-Agent", "unknown"),
+                    )
+                    return _build_bustiming_response(request, [])
+
+                total_time = time.perf_counter() - t0
+                api_ms = (t_api_end - t_api_start) * 1000
+                _log_bustiming_event(
+                    "info",
+                    "success",
+                    bus_stop=busstopcode,
+                    source="nus_nextbus",
+                    total_ms=round(total_time * 1000, 2),
+                    api_ms=round(api_ms, 2),
+                    process_ms=0,
+                    sort_ms=0,
+                    user_agent=request.headers.get("User-Agent", "unknown"),
+                )
+                return _build_bustiming_response(request, services)
+            else:
+                try:
+                    response = await _cache.get_or_fetch(
+                        key=busstopcode,
+                        fetch_fn=lambda: queryAPI(
+                            "ltaodataservice/v3/BusArrival",
+                            {"BusStopCode": busstopcode},
+                            empty_on_error=True,
+                        )
+                    )
+                except HTTPException:
+                    raise
+                except Exception as exc:
+                    emit_exception_log(
+                        "error",
+                        "cache_internal_error_bypass",
+                        exc,
+                        route="/bustiming",
+                        bus_stop=busstopcode,
+                        source="lta",
+                        user_agent=request.headers.get("User-Agent", "unknown"),
+                    )
+                    response = await queryAPI(
                         "ltaodataservice/v3/BusArrival",
                         {"BusStopCode": busstopcode},
                         empty_on_error=True,
                     )
-                )
-            except HTTPException:
-                raise
-            except Exception as exc:
-                emit_exception_log(
-                    "error",
-                    "cache_internal_error_bypass",
-                    exc,
-                    route="/bustiming",
-                    bus_stop=busstopcode,
-                    user_agent=request.headers.get("User-Agent", "unknown"),
-                )
-                response = await queryAPI(
-                    "ltaodataservice/v3/BusArrival",
-                    {"BusStopCode": busstopcode},
-                    empty_on_error=True,
-                )
 
-            t_api_end = time.perf_counter()
+                t_api_end = time.perf_counter()
 
             services = response.get("Services", [])
             if not services:
@@ -314,6 +366,7 @@ async def get_bus_timing(
                     "info",
                     "empty_response",
                     bus_stop=busstopcode,
+                    source="lta",
                     total_ms=round(total_time * 1000, 2),
                     api_ms=api_ms,
                     cache_hit=api_ms < 1.0,
@@ -347,6 +400,7 @@ async def get_bus_timing(
                 "info",
                 "success",
                 bus_stop=busstopcode,
+                source="lta",
                 total_ms=round(total_time * 1000, 2),
                 api_ms=round(api_ms, 2),
                 cache_hit=api_ms < 1.0,

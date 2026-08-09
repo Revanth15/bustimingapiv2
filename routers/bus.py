@@ -9,6 +9,18 @@ import httpx
 from pydantic import BaseModel
 import pytz
 from routers.database import getDBClient
+from routers.nus_nextbus import (
+    BUS_STOP_AVAILABLE_SERVICES_KEY,
+    NUS_BUS_STATIC_KEY,
+    build_nus_stop_services_lookup,
+    current_sgt_timestamp,
+    fetch_nus_static_data,
+    format_nus_bus_route_raw,
+    format_nus_bus_routes,
+    format_nus_bus_stops,
+    is_lta_stop_code,
+    merge_bus_stop_available_services,
+)
 from routers.utils import (
     cache_headers,
     emit_route_exception,
@@ -33,6 +45,27 @@ GEOJSON_URL = "https://data.busrouter.sg/v1/routes.min.geojson"
 
 class PolylineRequest(BaseModel):
     serviceNumbers: list[str]
+
+
+def _parse_json_value(value):
+    if isinstance(value, str):
+        return json.loads(value)
+    return value
+
+
+def _preserve_non_lta_stop_services(existing, refreshed_lta: dict) -> dict:
+    if not existing:
+        return refreshed_lta
+
+    existing_data = _parse_json_value(existing)
+    if not isinstance(existing_data, dict):
+        return refreshed_lta
+
+    merged = dict(refreshed_lta)
+    for stop_code, services in existing_data.items():
+        if not is_lta_stop_code(str(stop_code)):
+            merged[str(stop_code)] = services
+    return merged
 
 @bus_router.api_route("/health", methods=["GET", "HEAD"])
 async def health_check(request: Request):
@@ -156,6 +189,23 @@ async def extract_bus_stops(request: Request):
         stage = "format_routes"
         formatted_bus_route_data, formatted_bus_stop_available_services = getFormattedBusRoutesData(raw_bus_route_data)
 
+        stage = "merge_existing_non_lta_stop_services"
+        existing_services_response = (
+            dbClient.table("jsons")
+            .select("json_value")
+            .eq("id", bus_stop_available_services_key)
+            .execute()
+        )
+        existing_services = (
+            existing_services_response.data[0]["json_value"]
+            if existing_services_response.data
+            else {}
+        )
+        formatted_bus_stop_available_services = _preserve_non_lta_stop_services(
+            existing_services,
+            formatted_bus_stop_available_services,
+        )
+
         # Get current timestamp in Singapore time (GMT+8)
         sgt_timezone = pytz.timezone("Asia/Singapore")
         current_timestamp = datetime.now(sgt_timezone).isoformat()
@@ -219,6 +269,115 @@ async def extract_bus_stops(request: Request):
     except Exception as exc:
         print(f"Error processing bus routes data: {exc}")
         emit_route_exception("/extractBusRoutesData", request, exc, t0, stage=stage)
+        raise HTTPException(status_code=500, detail=f"Error: {str(exc)}")
+
+
+@bus_router.post("/extractNusBusData")
+async def extract_nus_bus_data(request: Request):
+    t0 = time.perf_counter()
+    stage = "fetch_nus_static_data"
+
+    try:
+        static_data = await fetch_nus_static_data()
+        current_timestamp = current_sgt_timestamp()
+
+        stage = "format_nus_data"
+        bus_stop_rows = format_nus_bus_stops(static_data, current_timestamp)
+        bus_route_rows = format_nus_bus_routes(static_data, current_timestamp)
+        bus_route_raw_rows = format_nus_bus_route_raw(static_data, current_timestamp)
+        nus_stop_services = build_nus_stop_services_lookup(static_data)
+
+        if bus_stop_rows:
+            stage = "upsert_nus_bus_stops"
+            response = (
+                dbClient.table("bus_stops")
+                .upsert(bus_stop_rows, on_conflict="id")
+                .execute()
+            )
+            if not response.data:
+                raise HTTPException(status_code=500, detail="Failed to upsert NUS bus stops")
+
+        if bus_route_rows:
+            stage = "upsert_nus_bus_routes"
+            response = (
+                dbClient.table("bus_route")
+                .upsert(bus_route_rows, on_conflict="service_no")
+                .execute()
+            )
+            if not response.data:
+                raise HTTPException(status_code=500, detail="Failed to upsert NUS bus routes")
+
+        if bus_route_raw_rows:
+            stage = "upsert_nus_bus_route_raw"
+            response = (
+                dbClient.table("bus_route_raw")
+                .upsert(bus_route_raw_rows, on_conflict="id")
+                .execute()
+            )
+            if not response.data:
+                raise HTTPException(status_code=500, detail="Failed to upsert NUS raw bus routes")
+
+        stage = "load_existing_stop_services"
+        existing_services_response = (
+            dbClient.table("jsons")
+            .select("json_value")
+            .eq("id", BUS_STOP_AVAILABLE_SERVICES_KEY)
+            .execute()
+        )
+        existing_services = (
+            existing_services_response.data[0]["json_value"]
+            if existing_services_response.data
+            else {}
+        )
+        merged_stop_services = merge_bus_stop_available_services(
+            existing_services,
+            nus_stop_services,
+        )
+
+        stage = "upsert_nus_jsons"
+        response = (
+            dbClient.table("jsons")
+            .upsert(
+                [
+                    {
+                        "id": BUS_STOP_AVAILABLE_SERVICES_KEY,
+                        "json_value": json.dumps(merged_stop_services, separators=(",", ":")),
+                        "modified_at": current_timestamp,
+                    },
+                    {
+                        "id": NUS_BUS_STATIC_KEY,
+                        "json_value": json.dumps(static_data, separators=(",", ":")),
+                        "modified_at": current_timestamp,
+                    },
+                ],
+                on_conflict="id",
+            )
+            .execute()
+        )
+        if not response.data:
+            raise HTTPException(status_code=500, detail="Failed to upsert NUS JSON metadata")
+
+        stage = "purge_cache"
+        for key in ("/getallbusstops", "/getBusRoutesData", "/bus-routes/stops"):
+            blob_cache.delete(key)
+
+        return {
+            "message": "NUS bus data processed successfully",
+            "stops": len(bus_stop_rows),
+            "routes": len(bus_route_rows),
+            "rawRouteStops": len(bus_route_raw_rows),
+            "updatedBusStopAvailableServices": True,
+        }
+
+    except HTTPException as exc:
+        emit_route_http_error("/extractNusBusData", request, exc, t0, stage=stage)
+        raise
+    except httpx.HTTPError as exc:
+        emit_route_exception("/extractNusBusData", request, exc, t0, stage=stage)
+        raise HTTPException(status_code=503, detail="Failed to fetch NUS bus data") from exc
+    except Exception as exc:
+        print(f"Error processing NUS bus data: {exc}")
+        emit_route_exception("/extractNusBusData", request, exc, t0, stage=stage)
         raise HTTPException(status_code=500, detail=f"Error: {str(exc)}")
     
 @bus_router.get("/getBusRoutesData")

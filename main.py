@@ -46,7 +46,6 @@ app.add_middleware(
     exclude_prefixes=[
         "/favicon.ico",
         "/health",
-        "/transit_route",
         "/memory"
     ],
     exclude_exact=[
