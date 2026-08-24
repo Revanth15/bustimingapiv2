@@ -26,19 +26,19 @@ RAIL_STATIONS_ROUTE_KEY = "/getRailStationsData"
 RAIL_STATION_EXITS_ROUTE_KEY = "/getRailStationExitsData"
 
 COLOR_MAP = {
-    "orangered": "#FF4500",
-    "mediumseagreen": "#3CB371",
-    "darkslateblue": "#483D8B",
-    "darkmagenta": "#8B008B",
-    "saddlebrown": "#8B4513",
-    "orange": "#FFA500",
-    "gray": "#808080",
-    "red": "#FF0000",
-    "green": "#008000",
-    "yellow": "#FFFF00",
-    "blue": "#0000FF",
-    "purple": "#800080",
-    "brown": "#A52A2A",
+    "orangered": "#DF2827",
+    "mediumseagreen": "#009645",
+    "darkslateblue": "#0055B8",
+    "darkmagenta": "#9900AB",
+    "saddlebrown": "#9D5918",
+    "orange": "#FA9E0D",
+    "gray": "#708270",
+    "red": "#DF2827",
+    "green": "#009645",
+    "yellow": "#FA9E0D",
+    "blue": "#0055B8",
+    "purple": "#9900AB",
+    "brown": "#9D5918",
 }
 
 
