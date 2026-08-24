@@ -25,9 +25,9 @@ def readJsonFile(file_path):
 latestBuses = readJsonFile(json_path)
 outdatedBuses = readJsonFile(json_path2)
 c = list(set(latestBuses) - set(outdatedBuses))
-print(c)
+print(json.dumps(c))
 d = list(set(outdatedBuses) - set(latestBuses))
-print(d)
+print(json.dumps(d))
 
 # ============================================================
 # Bus Service Comparison Script – Data Preparation Guide
